@@ -187,6 +187,56 @@ inline std::map<std::string, std::vector<std::string> > pairs(
   return result;
 }
 
+#if __cplusplus >= 201103L
+namespace helper {
+
+
+template <typename THead, typename... TTail>
+class TJoiner {
+public:
+  static void Do(const std::string& separator, std::stringstream& ss,
+                 THead&& val, TTail&&... args)
+  {
+    ss << std::string(val) << separator;
+    TJoiner<TTail...>::Do(separator, ss, std::forward<TTail>(args)...);
+  }
+};
+
+template<typename TVal>
+class TJoiner<TVal> {
+public:
+  static void Do(const std::string& separator, std::stringstream& ss,
+                 TVal&& val)
+  {
+    ss << std::string(val);;
+  }
+};
+
+
+} // namespace helper {
+
+
+template <typename ...TVal>
+inline std::stringstream& join(std::stringstream& ss,
+                               const std::string& separator,
+                               TVal &&...args)
+{
+  helper::TJoiner<TVal...>::Do(separator, ss, std::forward<TVal>(args)...);
+  return ss;
+}
+
+
+template <typename ...TVal>
+inline std::string join(const std::string& separator, TVal &&...args)
+{
+  std::stringstream ss;
+  join(ss, separator, std::forward<TVal>(args)...);
+  return ss.str();
+}
+
+
+#else // __cplusplus >= 201103L
+
 
 inline std::string join(const std::string& separator,
                         const std::string& s1,
@@ -237,6 +287,7 @@ inline std::string join(const std::string& separator,
   return s1 + separator + s2 + separator + s3 + separator + s4 + separator +
          s5 + separator + s6;
 }
+#endif
 
 
 // Use duck-typing to join any iterable.
