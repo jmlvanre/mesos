@@ -15,6 +15,7 @@
 #define __STOUT_STRINGS_HPP__
 
 #include <algorithm>
+#include <sstream>
 #include <string>
 #include <map>
 #include <vector>
@@ -187,30 +188,30 @@ inline std::map<std::string, std::vector<std::string> > pairs(
   return result;
 }
 
-#if __cplusplus >= 201103L
+
 namespace helper {
 
 
-template <typename THead, typename... TTail>
-class TJoiner {
-public:
-  static void Do(const std::string& separator, std::stringstream& ss,
-                 THead&& val, TTail&&... args)
-  {
-    ss << std::string(val) << separator;
-    TJoiner<TTail...>::Do(separator, ss, std::forward<TTail>(args)...);
-  }
-};
+template <typename TVal>
+inline std::stringstream& join(std::stringstream& ss,
+                               const std::string& separator,
+                               TVal&& tail)
+{
+  ss << std::string(tail);
+  return ss;
+}
 
-template<typename TVal>
-class TJoiner<TVal> {
-public:
-  static void Do(const std::string& separator, std::stringstream& ss,
-                 TVal&& val)
-  {
-    ss << std::string(val);;
-  }
-};
+
+template <typename THead, typename ...TVal>
+inline std::stringstream& join(std::stringstream& ss,
+                               const std::string& separator,
+                               THead&& head,
+                               TVal&&... args)
+{
+  ss << std::string(head) << separator;
+  helper::join(ss, separator, std::forward<TVal>(args)...);
+  return ss;
+}
 
 
 } // namespace helper {
@@ -219,75 +220,22 @@ public:
 template <typename ...TVal>
 inline std::stringstream& join(std::stringstream& ss,
                                const std::string& separator,
-                               TVal &&...args)
+                               TVal&&... args)
 {
-  helper::TJoiner<TVal...>::Do(separator, ss, std::forward<TVal>(args)...);
+  helper::join(ss, separator, std::forward<TVal>(args)...);
   return ss;
 }
 
 
-template <typename ...TVal>
-inline std::string join(const std::string& separator, TVal &&...args)
+template <typename TVal, typename ...TRest>
+inline std::string join(const std::string& separator, TVal&& val1, TVal&& val2,
+                        TRest &&...rest)
 {
   std::stringstream ss;
-  join(ss, separator, std::forward<TVal>(args)...);
+  helper::join(ss, separator, std::forward<TVal>(val1),
+               std::forward<TVal>(val2), std::forward<TVal>(rest)...);
   return ss.str();
 }
-
-
-#else // __cplusplus >= 201103L
-
-
-inline std::string join(const std::string& separator,
-                        const std::string& s1,
-                        const std::string& s2)
-{
-  return s1 + separator + s2;
-}
-
-
-inline std::string join(const std::string& separator,
-                        const std::string& s1,
-                        const std::string& s2,
-                        const std::string& s3)
-{
-  return s1 + separator + s2 + separator + s3;
-}
-
-
-inline std::string join(const std::string& separator,
-                        const std::string& s1,
-                        const std::string& s2,
-                        const std::string& s3,
-                        const std::string& s4)
-{
-  return s1 + separator + s2 + separator + s3 + separator + s4;
-}
-
-
-inline std::string join(const std::string& separator,
-                        const std::string& s1,
-                        const std::string& s2,
-                        const std::string& s3,
-                        const std::string& s4,
-                        const std::string& s5)
-{
-  return s1 + separator + s2 + separator + s3 + separator + s4 + separator + s5;
-}
-
-
-inline std::string join(const std::string& separator,
-                        const std::string& s1,
-                        const std::string& s2,
-                        const std::string& s3,
-                        const std::string& s4,
-                        const std::string& s5,
-                        const std::string& s6)
-{
-  return s1 + separator + s2 + separator + s3 + separator + s4 + separator +
-         s5 + separator + s6;
-}
-#endif
 
 
 // Use duck-typing to join any iterable.

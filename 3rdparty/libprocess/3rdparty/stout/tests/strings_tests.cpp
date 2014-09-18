@@ -364,10 +364,8 @@ TEST(StringsTest, Join)
   EXPECT_EQ("a/b", strings::join("/", "a", "b"));
   EXPECT_EQ("a/b/c", strings::join("/", "a", "b", "c"));
   EXPECT_EQ("a\nb\nc\nd", strings::join("\n", "a", "b", "c", "d"));
-  #if __cplusplus >= 201103L
   std::stringstream ss;
   EXPECT_EQ("a, b, c", strings::join(ss, ", ", "a", "b", "c").str());
-  #endif // __cplusplus >= 201103L
 }
 
 
