@@ -227,13 +227,13 @@ inline std::stringstream& join(std::stringstream& ss,
 }
 
 
-template <typename TVal, typename ...TRest>
-inline std::string join(const std::string& separator, TVal&& val1, TVal&& val2,
-                        TRest &&...rest)
+template <typename TVal1, typename TVal2, typename ...TRest>
+inline std::string join(const std::string& separator, TVal1&& val1,
+                        TVal2&& val2, TRest &&...rest)
 {
   std::stringstream ss;
-  helper::join(ss, separator, std::forward<TVal>(val1),
-               std::forward<TVal>(val2), std::forward<TVal>(rest)...);
+  helper::join(ss, separator, std::forward<TVal1>(val1),
+               std::forward<TVal2>(val2), std::forward<TRest>(rest)...);
   return ss.str();
 }
 

@@ -361,11 +361,13 @@ TEST(StringsTest, Pairs)
 
 TEST(StringsTest, Join)
 {
+  std::string narly("narly");
   EXPECT_EQ("a/b", strings::join("/", "a", "b"));
   EXPECT_EQ("a/b/c", strings::join("/", "a", "b", "c"));
   EXPECT_EQ("a\nb\nc\nd", strings::join("\n", "a", "b", "c", "d"));
   std::stringstream ss;
   EXPECT_EQ("a, b, c", strings::join(ss, ", ", "a", "b", "c").str());
+  EXPECT_EQ("a/narly/c", strings::join("/", "a", narly, "c"));
 }
 
 
