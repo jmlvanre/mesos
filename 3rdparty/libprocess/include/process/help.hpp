@@ -1,9 +1,7 @@
 #ifndef __PROCESS_HELP_HPP__
 #define __PROCESS_HELP_HPP__
 
-#include <map>
 #include <string>
-#include <vector>
 
 #include <process/future.hpp>
 #include <process/http.hpp>
@@ -56,20 +54,20 @@ inline std::string USAGE(const std::string& usage)
 
 
 template <typename ...T>
-inline std::string DESCRIPTION(T &&...args)
+inline std::string DESCRIPTION(T&&... args)
 {
-  std::stringstream ss;
-  strings::join(ss, "\n", std::forward<T>(args)...) << "\n";
-  return ss.str();
+  std::stringstream builder;
+  strings::join(builder, "\n", std::forward<T>(args)...) << "\n";
+  return builder.str();
 }
 
 
 template <typename ...T>
-inline std::string REFERENCES(T &&...args)
+inline std::string REFERENCES(T&&... args)
 {
-  std::stringstream ss;
-  strings::join(ss, "\n", std::forward<T>(args)...) << "\n";
-  return ss.str();
+  std::stringstream builder;
+  strings::join(builder, "\n", std::forward<T>(args)...) << "\n";
+  return builder.str();
 }
 
 

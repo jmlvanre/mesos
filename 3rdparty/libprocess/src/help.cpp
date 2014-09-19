@@ -33,29 +33,16 @@
 #include <stout/stringify.hpp>
 #include <stout/strings.hpp>
 
+using std::string;
+using std::vector;
+
 namespace process {
 
-// Constructs a Markdown based help "page" for a route with the
-// following template:
-//
-//     ### TL;DR; ###
-//     tldr
-//
-//     ### USAGE ###
-//     usage
-//
-//     ### DESCRIPTION ###
-//     description
-//
-//     references
-//
-// See the 'TLDR', 'USAGE', 'DESCRIPTION', and 'REFERENCES' helpers
-// below to more easily construct your help pages.
-std::string HELP(
-    std::string tldr,
-    std::string usage,
-    std::string description,
-    const Option<std::string>& references)
+string HELP(
+    string tldr,
+    string usage,
+    string description,
+    const Option<string>& references)
 {
   // Make sure 'tldr', 'usage', and 'description' end with a newline.
   if (!strings::endsWith(tldr, "\n")) {
@@ -71,7 +58,7 @@ std::string HELP(
   }
 
   // Construct the help string.
-  std::string help =
+  string help =
     "### TL;DR; ###\n" +
     tldr +
     "\n" +
@@ -89,11 +76,13 @@ std::string HELP(
   return help;
 }
 
+
 Help::Help() : ProcessBase("help") {}
 
-void Help::add(const std::string& id,
-         const std::string& name,
-         const Option<std::string>& help)
+
+void Help::add(const string& id,
+    const string& name,
+    const Option<string>& help)
 {
   if (id != "help") { // TODO(benh): Enable help for help.
     if (help.isSome()) {
@@ -105,18 +94,20 @@ void Help::add(const std::string& id,
   }
 }
 
+
 void Help::initialize()
 {
   route("/", None(), &Help::help);
 }
 
+
 Future<http::Response> Help::help(const http::Request& request)
 {
   // Split the path by '/'.
-  std::vector<std::string> tokens = strings::tokenize(request.path, "/");
+  vector<string> tokens = strings::tokenize(request.path, "/");
 
-  Option<std::string> id = None();
-  Option<std::string> name = None();
+  Option<string> id = None();
+  Option<string> name = None();
 
   if (tokens.size() > 3) {
     return http::BadRequest("Malformed URL, expecting '/help/id/name/'\n");
@@ -127,49 +118,49 @@ Future<http::Response> Help::help(const http::Request& request)
     id = tokens[1];
   }
 
-  std::string document;
-  std::string references;
+  string document;
+  string references;
 
   if (id.isNone()) {             // http://ip:port/help
     document += "## HELP\n";
-    foreachkey (const std::string& id, helps) {
+    foreachkey (const string& id, helps) {
       document += "> [/" + id + "][" + id + "]\n";
       references += "[" + id + "]: /help/" + id + "\n";
     }
   } else if (name.isNone()) {    // http://ip:port/help/id
     if (helps.count(id.get()) == 0) {
       return http::BadRequest(
-    "No help available for '/" + id.get() + "'.\n");
+          "No help available for '/" + id.get() + "'.\n");
     }
 
     document += "## `/" + id.get() + "` ##\n";
-    foreachkey (const std::string& name, helps[id.get()]) {
-      const std::string& path = id.get() + name;
+    foreachkey (const string& name, helps[id.get()]) {
+      const string& path = id.get() + name;
       document += "> [/" +  path + "][" + path + "]\n";
       references += "[" + path + "]: /help/" + path + "\n";
     }
   } else {                       // http://ip:port/help/id/name
     if (helps.count(id.get()) == 0) {
       return http::BadRequest(
-    "No help available for '/" + id.get() + "'.\n");
+          "No help available for '/" + id.get() + "'.\n");
     } else if (helps[id.get()].count("/" + name.get()) == 0) {
       return http::BadRequest(
-    "No help available for '/" + id.get() + "/" + name.get() + "'.\n");
+        "No help available for '/" + id.get() + "/" + name.get() + "'.\n");
     }
 
     document += helps[id.get()]["/" + name.get()];
   }
 
   // Final Markdown is 'document' followed by the 'references'.
-  std::string markdown = document + "\n" + references;
+  string markdown = document + "\n" + references;
 
   // Just send the Markdown if we aren't speaking to a browser. For
   // now we only check for the 'curl' or 'http' utilities.
-  Option<std::string> agent = request.headers.get("User-Agent");
+  Option<string> agent = request.headers.get("User-Agent");
 
   if (agent.isSome() &&
       (strings::startsWith(agent.get(), "curl") ||
-  strings::startsWith(agent.get(), "HTTPie"))) {
+       strings::startsWith(agent.get(), "HTTPie"))) {
     http::Response response = http::OK(markdown);
     response.headers["Content-Type"] = "text/x-markdown";
     return response;
