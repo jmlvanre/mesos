@@ -11,8 +11,7 @@ namespace process {
 class Node
 {
 public:
-  Node(uint32_t _ip = 0, uint16_t _port = 0)
-    : ip(_ip), port(_port) {}
+  Node(uint32_t _ip = 0, uint16_t _port = 0) : ip(_ip), port(_port) {}
 
   bool operator < (const Node& that) const
   {
