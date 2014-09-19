@@ -193,9 +193,9 @@ namespace helper {
 
 
 template <typename TVal>
-inline std::stringstream& join(std::stringstream& ss,
-                               const std::string& separator,
-                               TVal&& tail)
+std::stringstream& join(std::stringstream& ss,
+    const std::string& separator,
+    TVal&& tail)
 {
   ss << std::string(tail);
   return ss;
@@ -203,10 +203,10 @@ inline std::stringstream& join(std::stringstream& ss,
 
 
 template <typename THead, typename ...TVal>
-inline std::stringstream& join(std::stringstream& ss,
-                               const std::string& separator,
-                               THead&& head,
-                               TVal&&... args)
+std::stringstream& join(std::stringstream& ss,
+    const std::string& separator,
+    THead&& head,
+    TVal&&... args)
 {
   ss << std::string(head) << separator;
   helper::join(ss, separator, std::forward<TVal>(args)...);
@@ -218,9 +218,9 @@ inline std::stringstream& join(std::stringstream& ss,
 
 
 template <typename ...TVal>
-inline std::stringstream& join(std::stringstream& ss,
-                               const std::string& separator,
-                               TVal&&... args)
+std::stringstream& join(std::stringstream& ss,
+    const std::string& separator,
+    TVal&&... args)
 {
   helper::join(ss, separator, std::forward<TVal>(args)...);
   return ss;
@@ -228,8 +228,10 @@ inline std::stringstream& join(std::stringstream& ss,
 
 
 template <typename TVal1, typename TVal2, typename ...TRest>
-inline std::string join(const std::string& separator, TVal1&& val1,
-                        TVal2&& val2, TRest &&...rest)
+std::string join(const std::string& separator,
+    TVal1&& val1,
+    TVal2&& val2,
+    TRest &&...rest)
 {
   std::stringstream ss;
   helper::join(ss, separator, std::forward<TVal1>(val1),
