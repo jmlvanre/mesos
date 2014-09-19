@@ -56,18 +56,14 @@ inline std::string USAGE(const std::string& usage)
 template <typename ...T>
 inline std::string DESCRIPTION(T&&... args)
 {
-  std::stringstream builder;
-  strings::join(builder, "\n", std::forward<T>(args)...) << "\n";
-  return builder.str();
+  return strings::join("\n", std::forward<T>(args)..., "\n");
 }
 
 
 template <typename ...T>
 inline std::string REFERENCES(T&&... args)
 {
-  std::stringstream builder;
-  strings::join(builder, "\n", std::forward<T>(args)...) << "\n";
-  return builder.str();
+  return strings::join("\n", std::forward<T>(args)..., "\n");
 }
 
 
