@@ -361,13 +361,17 @@ TEST(StringsTest, Pairs)
 
 TEST(StringsTest, Join)
 {
-  std::string narly("narly");
+  const std::string narly("narly");
+  const bool is_true = true;
+  const std::set<int32_t> my_set {1, 2, 3};
   EXPECT_EQ("a/b", strings::join("/", "a", "b"));
   EXPECT_EQ("a/b/c", strings::join("/", "a", "b", "c"));
   EXPECT_EQ("a\nb\nc\nd", strings::join("\n", "a", "b", "c", "d"));
   std::stringstream ss;
   EXPECT_EQ("a, b, c", strings::join(ss, ", ", "a", "b", "c").str());
   EXPECT_EQ("a/narly/c", strings::join("/", "a", narly, "c"));
+  EXPECT_EQ("a/narly/true/{ 1, 2, 3 }/c",
+      strings::join("/", "a", narly, is_true, my_set, "c"));
 }
 
 

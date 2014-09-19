@@ -189,53 +189,96 @@ inline std::map<std::string, std::vector<std::string> > pairs(
 }
 
 
-namespace helper {
+namespace internal {
 
 
-template <typename TVal>
-std::stringstream& join(std::stringstream& ss,
-    const std::string& separator,
-    TVal&& tail)
+inline std::stringstream& append(
+    std::stringstream& ss,
+    const std::string& val)
 {
-  ss << std::string(tail);
+  ss << val;
   return ss;
 }
 
 
-template <typename THead, typename ...TVal>
-std::stringstream& join(std::stringstream& ss,
+inline std::stringstream& append(
+    std::stringstream& ss,
+    std::string&& val)
+{
+  ss << val;
+  return ss;
+}
+
+
+inline std::stringstream& append(
+    std::stringstream& ss,
+    const char*&& val)
+{
+  ss << val;
+  return ss;
+}
+
+
+template <typename T>
+std::stringstream& append(
+    std::stringstream& ss,
+    T&& val)
+{
+  ss << ::stringify(std::forward<T>(val));
+  return ss;
+}
+
+
+template <typename T>
+std::stringstream& join(
+    std::stringstream& ss,
+    const std::string& separator,
+    T&& tail)
+{
+  return append(ss, std::forward<T>(tail));
+}
+
+
+template <typename THead, typename ...TTail>
+std::stringstream& join(
+    std::stringstream& ss,
     const std::string& separator,
     THead&& head,
-    TVal&&... args)
+    TTail&&... tail)
 {
-  ss << std::string(head) << separator;
-  helper::join(ss, separator, std::forward<TVal>(args)...);
+  append(ss, std::forward<THead>(head)) << separator;
+  internal::join(ss, separator, std::forward<TTail>(tail)...);
   return ss;
 }
 
 
-} // namespace helper {
+} // namespace internal {
 
 
-template <typename ...TVal>
-std::stringstream& join(std::stringstream& ss,
+template <typename ...T>
+std::stringstream& join(
+    std::stringstream& ss,
     const std::string& separator,
-    TVal&&... args)
+    T&&... args)
 {
-  helper::join(ss, separator, std::forward<TVal>(args)...);
+  internal::join(ss, separator, std::forward<T>(args)...);
   return ss;
 }
 
 
-template <typename TVal1, typename TVal2, typename ...TRest>
-std::string join(const std::string& separator,
-    TVal1&& val1,
-    TVal2&& val2,
-    TRest &&...rest)
+template <typename THead1, typename THead2, typename ...TTail>
+std::string join(
+    const std::string& separator,
+    THead1&& head1,
+    THead2&& head2,
+    TTail&&... tail)
 {
   std::stringstream ss;
-  helper::join(ss, separator, std::forward<TVal1>(val1),
-               std::forward<TVal2>(val2), std::forward<TRest>(rest)...);
+  internal::join(ss,
+    separator,
+    std::forward<THead1>(head1),
+    std::forward<THead2>(head2),
+    std::forward<TTail>(tail)...);
   return ss.str();
 }
 
