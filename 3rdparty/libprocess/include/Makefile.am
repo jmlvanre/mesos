@@ -36,6 +36,7 @@ nobase_include_HEADERS =		\
   process/owned.hpp			\
   process/pid.hpp			\
   process/process.hpp			\
+  process/process_reference.hpp		\
   process/profiler.hpp			\
   process/protobuf.hpp			\
   process/queue.hpp			\
