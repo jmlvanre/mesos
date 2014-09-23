@@ -23,6 +23,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <boost/concept_check.hpp>
 
 #include <mesos/resources.hpp>
 
@@ -43,6 +44,7 @@
 
 #include "slave/containerizer/isolator.hpp"
 #ifdef __linux__
+#include "slave/containerizer/isolators/cgroups/blkio.hpp"
 #include "slave/containerizer/isolators/cgroups/cpushare.hpp"
 #include "slave/containerizer/isolators/cgroups/mem.hpp"
 #include "slave/containerizer/isolators/cgroups/perf_event.hpp"
@@ -69,6 +71,7 @@ using namespace process;
 
 using mesos::internal::master::Master;
 #ifdef __linux__
+using mesos::internal::slave::CgroupsBlkIOIsolatorProcess;
 using mesos::internal::slave::CgroupsCpushareIsolatorProcess;
 using mesos::internal::slave::CgroupsMemIsolatorProcess;
 using mesos::internal::slave::CgroupsPerfEventIsolatorProcess;
@@ -726,6 +729,315 @@ TEST_F(PerfEventIsolatorTest, ROOT_CGROUPS_Sample)
   AWAIT_READY(isolator.get()->cleanup(containerId));
 
   delete isolator.get();
+}
+
+#endif // __linux__
+
+#ifdef __linux__
+
+class BlkIOIsolatorTest : public MesosTest {};
+
+int performBlkIO(const Bytes& _size, size_t iops, int pipes[2])
+{
+  // In child process.
+  while (::close(pipes[1]) == -1 && errno == EINTR);
+
+  // Wait until the parent signals us to continue.
+  char dummy;
+  ssize_t length;
+  while ((length = ::read(pipes[0], &dummy, sizeof(dummy))) == -1 &&
+    errno == EINTR);
+
+  if (length != sizeof(dummy)) {
+    ABORT("Failed to synchronize with parent");
+  }
+
+  while (::close(pipes[0]) == -1 && errno == EINTR);
+
+  size_t size = static_cast<size_t>(_size.bytes());
+  void* buffer = NULL;
+
+  CHECK(size % iops == 0);
+  const size_t io_size = size / iops;
+  CHECK(io_size % getpagesize() == 0);
+
+  // TODO(jmlvanre): explore why reported stats are 1 iop less for writes.
+  ++iops;
+
+  const std::string fname = os::getcwd() + "/blkio_usage_test";
+
+  int fd = open(fname.c_str(), O_CREAT | O_RDWR | O_DIRECT, 0777);
+  if (fd == -1) {
+    ostringstream err = "Error creating file " << os::getcwd()
+    << "blkio_usage_test";
+    perror(err.str().c_str());
+    abort();
+  }
+
+  if (posix_memalign(&buffer, getpagesize(), io_size) != 0) {
+    perror("Failed to allocate page-aligned memory, posix_memalign");
+    abort();
+  }
+
+  if (memset(buffer, 1, io_size) != buffer) {
+    perror("Failed to fill memory, memset");
+    abort();
+  }
+
+  for (size_t i = 0; i < iops; ++i) {
+    ssize_t ret = pwrite(fd, buffer, io_size, 0);
+    if (static_cast<size_t>(ret) != static_cast<size_t>(io_size)) {
+      perror("Failed to write to temp file");
+      abort();
+    }
+  }
+  for (size_t i = 0; i < iops; ++i) {
+    ssize_t ret = pread(fd, buffer, io_size, 0);
+    if (static_cast<size_t>(ret) != static_cast<size_t>(io_size)) {
+      perror("Failed to read from temp file");
+      abort();
+    }
+  }
+  close(fd);
+
+  unlink(fname.c_str());
+
+  free(buffer);
+
+  return 0;
+}
+
+TEST_F(BlkIOIsolatorTest, ROOT_CGROUPS_BlkIOKBPS)
+{
+  slave::Flags flags;
+
+  Try<Isolator*> isolator = CgroupsBlkIOIsolatorProcess::create(flags);
+  CHECK_SOME(isolator);
+
+  ContainerID containerId;
+  containerId.set_value("blkio_usage");
+
+  // A PosixLauncher is sufficient even when testing a cgroups isolator.
+  Try<Launcher*> launcher = PosixLauncher::create(flags);
+
+  Bytes bytes_threshold = Megabytes(2);
+  uint64_t iops_threshold = 512;
+  uint64_t write_kbps = 512;
+  uint64_t read_kbps = 256;
+
+  ExecutorInfo executorInfo;
+  ostringstream resource;
+  resource << "blk_read_kbps:" << read_kbps << ";blk_write_kbps:" << write_kbps;
+  executorInfo.mutable_resources()->CopyFrom(
+    Resources::parse(resource.str().c_str()).get());
+
+  AWAIT_READY(isolator.get()->prepare(containerId, executorInfo));
+
+  int pipes[2];
+  ASSERT_NE(-1, ::pipe(pipes));
+
+  Try<pid_t> pid = launcher.get()->fork(
+      containerId,
+      "/bin/sh",
+      vector<string>(),
+      Subprocess::FD(STDIN_FILENO),
+      Subprocess::FD(STDOUT_FILENO),
+      Subprocess::FD(STDERR_FILENO),
+      None(),
+      None(),
+      lambda::bind(&performBlkIO, bytes_threshold, iops_threshold, pipes));
+
+  ASSERT_SOME(pid);
+
+  // Set up the reaper to wait on the forked child.
+  Future<Option<int> > status = process::reap(pid.get());
+
+  // Continue in the parent.
+  ASSERT_SOME(os::close(pipes[0]));
+
+  // Isolate the forked child.
+  AWAIT_READY(isolator.get()->isolate(containerId, pid.get()));
+
+  // Now signal the child to continue.
+  char dummy;
+  ASSERT_LT(0, ::write(pipes[1], &dummy, sizeof(dummy)));
+
+  ASSERT_SOME(os::close(pipes[1]));
+
+  // Wait up to 60 seconds for the child process to perform blkio;
+  ResourceStatistics statistics;
+  bool done_writes = false;
+  bool done_reads = false;
+  Duration waited = Duration::zero();
+  Duration waited_for_write = Duration::zero();
+  Duration waited_for_read = Duration::zero();
+  Duration min_wait_for_write =
+    Seconds(bytes_threshold.kilobytes() / write_kbps);
+  Duration min_wait_for_read = Seconds(bytes_threshold.kilobytes() / read_kbps);
+  do {
+    Future<ResourceStatistics> usage = isolator.get()->usage(containerId);
+    AWAIT_READY(usage);
+
+    statistics = usage.get();
+
+    // If we meet our write usage expectations.
+    if (!done_writes &&
+      statistics.disk_write_total_bytes() >= bytes_threshold.bytes() &&
+      statistics.disk_write_total_iops() >= iops_threshold
+    ) {
+      done_writes = true;
+      waited_for_write = waited;
+    }
+    if (!done_reads &&
+      statistics.disk_read_total_bytes() >= bytes_threshold.bytes() &&
+      statistics.disk_read_total_iops() >= iops_threshold
+    ) {
+      done_reads = true;
+      waited_for_read = waited - waited_for_write;
+    }
+    if (done_writes && done_reads)
+    {
+      break;
+    }
+
+    os::sleep(Seconds(1));
+    waited += Seconds(1);
+  } while (waited < Seconds(60));
+
+  EXPECT_LE(bytes_threshold.bytes(), statistics.disk_write_total_bytes());
+  EXPECT_LE(iops_threshold, statistics.disk_write_total_iops());
+  EXPECT_LE(bytes_threshold.bytes(), statistics.disk_read_total_bytes());
+  EXPECT_LE(iops_threshold, statistics.disk_read_total_iops());
+  EXPECT_GE(waited_for_write, min_wait_for_write);
+  EXPECT_GE(waited_for_read, min_wait_for_read);
+
+  // Ensure all processes are killed.
+  AWAIT_READY(launcher.get()->destroy(containerId));
+
+  // Make sure the child was reaped.
+  AWAIT_READY(status);
+
+  // Let the isolator clean up.
+  AWAIT_READY(isolator.get()->cleanup(containerId));
+
+  delete isolator.get();
+  delete launcher.get();
+}
+
+TEST_F(BlkIOIsolatorTest, ROOT_CGROUPS_BlkIOIOPS)
+{
+  slave::Flags flags;
+
+  Try<Isolator*> isolator = CgroupsBlkIOIsolatorProcess::create(flags);
+  CHECK_SOME(isolator);
+
+  ContainerID containerId;
+  containerId.set_value("blkio_usage");
+
+  // A PosixLauncher is sufficient even when testing a cgroups isolator.
+  Try<Launcher*> launcher = PosixLauncher::create(flags);
+
+  Bytes bytes_threshold = Megabytes(2);
+  uint64_t iops_threshold = 512;
+  uint64_t write_iops = 64;
+  uint64_t read_iops = 128;
+
+  ExecutorInfo executorInfo;
+  ostringstream resource;
+  resource << "blk_read_iops:" << read_iops << ";blk_write_iops:" << write_iops;
+  executorInfo.mutable_resources()->CopyFrom(
+    Resources::parse(resource.str().c_str()).get());
+
+  AWAIT_READY(isolator.get()->prepare(containerId, executorInfo));
+
+  int pipes[2];
+  ASSERT_NE(-1, ::pipe(pipes));
+
+  Try<pid_t> pid = launcher.get()->fork(
+    containerId,
+    "/bin/sh",
+    vector<string>(),
+    Subprocess::FD(STDIN_FILENO),
+    Subprocess::FD(STDOUT_FILENO),
+    Subprocess::FD(STDERR_FILENO),
+    None(),
+    None(),
+    lambda::bind(&performBlkIO, bytes_threshold, iops_threshold, pipes));
+
+  ASSERT_SOME(pid);
+
+  // Set up the reaper to wait on the forked child.
+  Future<Option<int> > status = process::reap(pid.get());
+
+  // Continue in the parent.
+  ASSERT_SOME(os::close(pipes[0]));
+
+  // Isolate the forked child.
+  AWAIT_READY(isolator.get()->isolate(containerId, pid.get()));
+
+  // Now signal the child to continue.
+  char dummy;
+  ASSERT_LT(0, ::write(pipes[1], &dummy, sizeof(dummy)));
+
+  ASSERT_SOME(os::close(pipes[1]));
+
+  // Wait up to 60 seconds for the child process to perform blkio;
+  ResourceStatistics statistics;
+  bool done_writes = false;
+  bool done_reads = false;
+  Duration waited = Duration::zero();
+  Duration waited_for_write = Duration::zero();
+  Duration waited_for_read = Duration::zero();
+  Duration min_wait_for_write = Seconds(iops_threshold / write_iops);
+  Duration min_wait_for_read = Seconds(iops_threshold / read_iops);
+  do {
+    Future<ResourceStatistics> usage = isolator.get()->usage(containerId);
+    AWAIT_READY(usage);
+
+    statistics = usage.get();
+
+    // If we meet our write usage expectations.
+    if (!done_writes &&
+      statistics.disk_write_total_bytes() >= bytes_threshold.bytes() &&
+      statistics.disk_write_total_iops() >= iops_threshold
+    ) {
+      done_writes = true;
+      waited_for_write = waited;
+    }
+    if (!done_reads &&
+      statistics.disk_read_total_bytes() >= bytes_threshold.bytes() &&
+      statistics.disk_read_total_iops() >= iops_threshold
+    ) {
+      done_reads = true;
+      waited_for_read = waited - waited_for_write;
+    }
+    if (done_writes && done_reads)
+    {
+      break;
+    }
+
+    os::sleep(Seconds(1));
+    waited += Seconds(1);
+  } while (waited < Seconds(60));
+
+  EXPECT_LE(bytes_threshold.bytes(), statistics.disk_write_total_bytes());
+  EXPECT_LE(iops_threshold, statistics.disk_write_total_iops());
+  EXPECT_LE(bytes_threshold.bytes(), statistics.disk_read_total_bytes());
+  EXPECT_LE(iops_threshold, statistics.disk_read_total_iops());
+  EXPECT_GE(waited_for_write, min_wait_for_write);
+  EXPECT_GE(waited_for_read, min_wait_for_read);
+
+  // Ensure all processes are killed.
+  AWAIT_READY(launcher.get()->destroy(containerId));
+
+  // Make sure the child was reaped.
+  AWAIT_READY(status);
+
+  // Let the isolator clean up.
+  AWAIT_READY(isolator.get()->cleanup(containerId));
+
+  delete isolator.get();
+  delete launcher.get();
 }
 
 #endif // __linux__

@@ -190,6 +190,10 @@ public:
   Option<double> cpus() const;
   Option<Bytes> mem() const;
   Option<Bytes> disk() const;
+  Option<Bytes> blk_read_bps() const;
+  Option<Bytes> blk_write_bps() const;
+  Option<uint64_t> blk_read_iops() const;
+  Option<uint64_t> blk_write_iops() const;
 
   // TODO(vinod): Provide a Ranges abstraction.
   Option<Value::Ranges> ports() const;

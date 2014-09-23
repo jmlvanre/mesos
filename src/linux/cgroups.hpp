@@ -557,6 +557,54 @@ process::Future<Nothing> thaw(
 
 } // namespace freezer {
 
+namespace blkio {
+
+struct Partition {
+  uint64_t Major;
+  uint64_t Minor;
+  uint64_t Blocks;
+  std::string Name;
+};
+
+// Return aggregated stat information for read / writes of block devices
+// @param   hierarchy   Path to the hierarchy root.
+// @param   cgroup      Path to the cgroup relative to the hierarchy root.
+// @param   file        File to read from. (Ex: "blkio.throttle.io_serviced").
+// @return  The a pair of aggregated data for <read, write> information parsed
+//          from the file.
+//          Error if reading or parsing fails.
+Try<std::pair<uint64_t, uint64_t> > statAggregates(
+    const std::string& hierarchy,
+    const std::string& cgroup,
+    const std::string& file);
+
+// Return a vector of all partitions listed in /proc/partitions.
+Try<std::vector<Partition>> get_all_partitions();
+
+// Sets the bytes per second limit using blkio.throttle.'r/w'_bps_device.
+// @param   hierarchy   Path to the hierarchy root.
+// @param   cgroup      Path to the cgroup relative to the hierarchy root.
+// @param   type        'read' or 'write' to determine which type of io.
+// @param   limit       The maximum number of bytes allowed per second.
+Try<Nothing> limit_in_bytes(
+  const std::string& hierarchy,
+  const std::string& cgroup,
+  const char* type,
+  const Bytes& limit);
+
+// Sets the iops per second limit using blkio.throttle.'r/w'_iops_device.
+// @param   hierarchy   Path to the hierarchy root.
+// @param   cgroup      Path to the cgroup relative to the hierarchy root.
+// @param   type        'read' or 'write' to determine which type of io.
+// @param   limit       The maximum number of bytes allowed per second.
+Try<Nothing> limit_in_iops(
+  const std::string& hierarchy,
+  const std::string& cgroup,
+  const char* type,
+  const uint64_t iops);
+
+}  // namespace blkio {
+
 } // namespace cgroups {
 
 #endif // __CGROUPS_HPP__

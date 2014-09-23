@@ -36,6 +36,7 @@
 
 #include "slave/containerizer/isolators/posix.hpp"
 #ifdef __linux__
+#include "slave/containerizer/isolators/cgroups/blkio.hpp"
 #include "slave/containerizer/isolators/cgroups/cpushare.hpp"
 #include "slave/containerizer/isolators/cgroups/mem.hpp"
 #include "slave/containerizer/isolators/cgroups/perf_event.hpp"
@@ -97,6 +98,7 @@ Try<MesosContainerizer*> MesosContainerizer::create(
   creators["cgroups/cpu"] = &CgroupsCpushareIsolatorProcess::create;
   creators["cgroups/mem"] = &CgroupsMemIsolatorProcess::create;
   creators["cgroups/perf_event"] = &CgroupsPerfEventIsolatorProcess::create;
+  creators["cgroups/blkio"] = &CgroupsBlkIOIsolatorProcess::create;
 #endif // __linux__
 #ifdef WITH_NETWORK_ISOLATOR
   creators["network/port_mapping"] = &PortMappingIsolatorProcess::create;

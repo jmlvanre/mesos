@@ -2236,4 +2236,153 @@ Future<Nothing> thaw(
 
 } // namespace freezer {
 
+namespace blkio {
+
+Try<std::pair<uint64_t, uint64_t> > statAggregates(
+    const std::string& hierarchy,
+    const std::string& cgroup,
+    const std::string& file) {
+  uint64_t read_total = 0;
+  uint64_t write_total = 0;
+  Try<std::string> contents = cgroups::read(hierarchy, cgroup, file);
+
+  if (contents.isError()) {
+    return Error(contents.error());
+  }
+
+  foreach (const string& line, strings::split(contents.get(), "\n")) {
+    // Skip empty lines and lines that don't start with a digit.
+    const std::string trimmed = strings::trim(line);
+    if (trimmed.empty() || !isdigit(trimmed[0])) {
+      continue;
+    }
+
+    uint64_t major, minor;
+    char colon;
+    string name;
+    uint64_t value;
+
+    // Expected line format: "%llu:%llu %s %llu".
+    std::istringstream stream(trimmed);
+    stream >> major >> colon >> minor >> name >> value;
+
+    name = strings::trim(name);
+    if (name.compare("Read") == 0) {
+      read_total += value;
+    } else if (name.compare("Write") == 0) {
+      write_total += value;
+    }
+
+    if (stream.fail()) {
+      return Error("Unexpected line format in " + file + ": " + line);
+    }
+  }
+  return std::make_pair(read_total, write_total);
+}
+
+Try<std::vector<Partition>> get_all_partitions() {
+  // TODO(benh): Use os::read to get better error information.
+  std::ifstream file("/proc/partitions");
+
+  if (!file.is_open()) {
+    return Error("Failed to open /proc/partitions");
+  }
+
+  std::vector<Partition> partitions;
+
+  /* TODO(jmlvanre): We can refactor this pattern into a "for_each_line"
+     callback. It is used in many different places. */
+  while (!file.eof()) {
+    string line;
+    std::getline(file, line);
+    line = strings::trim(line);
+
+    if (file.fail()) {
+      if (!file.eof()) {
+        file.close();
+        return Error("Failed to read /proc/partitions");
+      }
+    } else {
+      if (line.empty()) {
+        // Skip empty lines.
+        continue;
+      } else if (!isdigit(line[0])) {
+        // Skip the line which doesn't start with a digit (contains titles).
+        continue;
+      } else {
+        // Parse line to get partition info.
+        Partition part;
+
+        std::istringstream ss(line);
+        ss >> part.Major >> part.Minor >> part.Blocks >> part.Name;
+
+        // Check for any read/parse errors.
+        if (ss.fail() && !ss.eof()) {
+          file.close();
+          return Error("Failed to parse /proc/partitions");
+        }
+
+        // TODO(jmlvanre): replace with emplace_back with proper C++11 support.
+        partitions.push_back(part);
+      }
+    }
+  }
+  file.close();
+  return partitions;
+}
+
+Try<Nothing> limit_in_bytes(
+    const std::string& hierarchy,
+    const std::string& cgroup,
+    const char* type,
+    const Bytes& limit) {
+  if (strcmp(type, "read") != 0 && strcmp(type, "write") != 0) {
+    return Error("limit_in_bytes must be applied to 'read' or 'write'");
+  }
+  Try<std::vector<Partition>> partitions = get_all_partitions();
+  if (partitions.isError()) {
+    return Error("error retrieving partitions: " + partitions.error());
+  }
+  std::ostringstream ss;
+  ss << "blkio.throttle." << type << "_bps_device";
+  const std::string file = ss.str();
+  foreach (const Partition& part, partitions.get()) {
+    std::ostringstream value;
+    value << part.Major << ':' << part.Minor << ' ' << limit.bytes();
+    Try<Nothing> write = cgroups::write(hierarchy, cgroup, file, value.str());
+    if (write.isError()) {
+      return Error("error setting bps limit: " + write.error());
+    }
+  }
+  return Nothing();
+}
+
+Try<Nothing> limit_in_iops(
+    const std::string& hierarchy,
+    const std::string& cgroup,
+    const char* type,
+    const uint64_t iops) {
+  if (strcmp(type, "read") != 0 && strcmp(type, "write") != 0) {
+    return Error("limit_in_iops must be applied to 'read' or 'write'");
+  }
+  Try<std::vector<Partition>> partitions = get_all_partitions();
+  if (partitions.isError()) {
+    return Error("error retrieving partitions: " + partitions.error());
+  }
+  std::ostringstream ss;
+  ss << "blkio.throttle." << type << "_iops_device";
+  const std::string file = ss.str();
+  foreach (const Partition& part, partitions.get()) {
+    std::ostringstream value;
+    value << part.Major << ':' << part.Minor << ' ' << iops;
+    Try<Nothing> write = cgroups::write(hierarchy, cgroup, file, value.str());
+    if (write.isError()) {
+      return Error("error setting iops limit: " + write.error());
+    }
+  }
+  return Nothing();
+}
+
+}  // namespace blkio {
+
 } // namespace cgroups {

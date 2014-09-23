@@ -500,6 +500,87 @@ Option<Bytes> Resources::disk() const
   return None();
 }
 
+/* TODO(jmlvanre): discuss why we can't use template<T>get(resource) to refactor
+  this repetitive pattern. */
+Option<Bytes> Resources::blk_read_bps() const
+{
+  double total = 0;
+  bool found = false;
+
+  foreach (const Resource& resource, resources) {
+    if (resource.name() == "blk_read_kbps" &&
+      resource.type() == Value::SCALAR) {
+      total += resource.scalar().value();
+      found = true;
+    }
+  }
+
+  if (found) {
+    return Kilobytes(static_cast<uint64_t>(total));
+  }
+
+  return None();
+}
+
+Option<Bytes> Resources::blk_write_bps() const
+{
+  double total = 0;
+  bool found = false;
+
+  foreach (const Resource& resource, resources) {
+    if (resource.name() == "blk_write_kbps" &&
+      resource.type() == Value::SCALAR) {
+      total += resource.scalar().value();
+    found = true;
+      }
+  }
+
+  if (found) {
+    return Kilobytes(static_cast<uint64_t>(total));
+  }
+
+  return None();
+}
+
+Option<uint64_t> Resources::blk_read_iops() const
+{
+  double total = 0;
+  bool found = false;
+
+  foreach (const Resource& resource, resources) {
+    if (resource.name() == "blk_read_iops" &&
+      resource.type() == Value::SCALAR) {
+      total += resource.scalar().value();
+      found = true;
+    }
+  }
+
+  if (found) {
+    return static_cast<uint64_t>(total);
+  }
+
+  return None();
+}
+
+Option<uint64_t> Resources::blk_write_iops() const
+{
+  double total = 0;
+  bool found = false;
+
+  foreach (const Resource& resource, resources) {
+    if (resource.name() == "blk_write_iops" &&
+      resource.type() == Value::SCALAR) {
+      total += resource.scalar().value();
+    found = true;
+      }
+  }
+
+  if (found) {
+    return static_cast<uint64_t>(total);
+  }
+
+  return None();
+}
 
 Option<Value::Ranges> Resources::ports() const
 {
