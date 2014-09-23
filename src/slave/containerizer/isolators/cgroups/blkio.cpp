@@ -215,8 +215,7 @@ Future<Nothing> CgroupsBlkIOIsolatorProcess::update(
     const Resources& resources)
 {
   if (resources.blk_read_bps().isNone() && resources.blk_read_iops().isNone() &&
-    resources.blk_write_bps().isNone() && resources.blk_write_iops().isNone()
-  ) {
+    resources.blk_write_bps().isNone() && resources.blk_write_iops().isNone()) {
     return Failure("No blkio resource given");
   }
 
@@ -240,7 +239,7 @@ Future<Nothing> CgroupsBlkIOIsolatorProcess::update(
         "Failed to set 'blkio.throttle.read_bps_device': " + write.error());
     }
     LOG(INFO) << "Updated 'blkio.throttle.read_bps_device' to " << r_bps.get()
-    << " for container " << containerId;
+              << " for container " << containerId;
   }
   if (w_bps.isSome()) {
     Try<Nothing> write = cgroups::blkio::limit_in_bytes(hierarchy, info->cgroup,
@@ -250,7 +249,7 @@ Future<Nothing> CgroupsBlkIOIsolatorProcess::update(
         "Failed to set 'blkio.throttle.write_bps_device': " + write.error());
     }
     LOG(INFO) << "Updated 'blkio.throttle.write_bps_device' to " << w_bps.get()
-    << " for container " << containerId;
+              << " for container " << containerId;
   }
   if (r_iops.isSome()) {
     Try<Nothing> write = cgroups::blkio::limit_in_iops(hierarchy, info->cgroup,
@@ -260,7 +259,7 @@ Future<Nothing> CgroupsBlkIOIsolatorProcess::update(
         "Failed to set 'blkio.throttle.read_iops_device': " + write.error());
     }
     LOG(INFO) << "Updated 'blkio.throttle.read_iops_device' to " << r_iops.get()
-    << " for container " << containerId;
+              << " for container " << containerId;
   }
   if (w_iops.isSome()) {
     Try<Nothing> write = cgroups::blkio::limit_in_iops(hierarchy, info->cgroup,
@@ -270,7 +269,7 @@ Future<Nothing> CgroupsBlkIOIsolatorProcess::update(
         "Failed to set 'blkio.throttle.write_iops_device': " + write.error());
     }
     LOG(INFO) << "Updated 'blkio.throttle.write_iops_device' to "
-    << w_iops.get() << " for container " << containerId;
+              << w_iops.get() << " for container " << containerId;
   }
 
   return Nothing();

@@ -500,8 +500,9 @@ Option<Bytes> Resources::disk() const
   return None();
 }
 
-/* TODO(jmlvanre): discuss why we can't use template<T>get(resource) to refactor
-  this repetitive pattern. */
+
+// TODO(jmlvanre): discuss why we can't use template<T>get(resource)
+// to refactor this repetitive pattern.
 Option<Bytes> Resources::blk_read_bps() const
 {
   double total = 0;
@@ -522,6 +523,7 @@ Option<Bytes> Resources::blk_read_bps() const
   return None();
 }
 
+
 Option<Bytes> Resources::blk_write_bps() const
 {
   double total = 0;
@@ -531,8 +533,8 @@ Option<Bytes> Resources::blk_write_bps() const
     if (resource.name() == "blk_write_kbps" &&
       resource.type() == Value::SCALAR) {
       total += resource.scalar().value();
-    found = true;
-      }
+      found = true;
+    }
   }
 
   if (found) {
@@ -541,6 +543,7 @@ Option<Bytes> Resources::blk_write_bps() const
 
   return None();
 }
+
 
 Option<uint64_t> Resources::blk_read_iops() const
 {
@@ -562,6 +565,7 @@ Option<uint64_t> Resources::blk_read_iops() const
   return None();
 }
 
+
 Option<uint64_t> Resources::blk_write_iops() const
 {
   double total = 0;
@@ -571,8 +575,8 @@ Option<uint64_t> Resources::blk_write_iops() const
     if (resource.name() == "blk_write_iops" &&
       resource.type() == Value::SCALAR) {
       total += resource.scalar().value();
-    found = true;
-      }
+      found = true;
+    }
   }
 
   if (found) {
@@ -581,6 +585,7 @@ Option<uint64_t> Resources::blk_write_iops() const
 
   return None();
 }
+
 
 Option<Value::Ranges> Resources::ports() const
 {
@@ -601,6 +606,7 @@ Option<Value::Ranges> Resources::ports() const
 
   return None();
 }
+
 
 Option<Value::Ranges> Resources::ports(size_t numPorts) const
 {
@@ -632,6 +638,7 @@ Option<Value::Ranges> Resources::ports(size_t numPorts) const
 
   return None();
 }
+
 
 Option<Value::Ranges> Resources::ephemeral_ports() const
 {

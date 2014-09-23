@@ -2236,6 +2236,7 @@ Future<Nothing> thaw(
 
 } // namespace freezer {
 
+
 namespace blkio {
 
 Try<std::pair<uint64_t, uint64_t> > statAggregates(
@@ -2280,6 +2281,7 @@ Try<std::pair<uint64_t, uint64_t> > statAggregates(
   return std::make_pair(read_total, write_total);
 }
 
+
 Try<std::vector<Partition>> get_all_partitions() {
   // TODO(benh): Use os::read to get better error information.
   std::ifstream file("/proc/partitions");
@@ -2290,8 +2292,8 @@ Try<std::vector<Partition>> get_all_partitions() {
 
   std::vector<Partition> partitions;
 
-  /* TODO(jmlvanre): We can refactor this pattern into a "for_each_line"
-     callback. It is used in many different places. */
+  // TODO(jmlvanre): We can refactor this pattern into a "for_each_line"
+  // callback. It is used in many different places.
   while (!file.eof()) {
     string line;
     std::getline(file, line);
@@ -2331,6 +2333,7 @@ Try<std::vector<Partition>> get_all_partitions() {
   return partitions;
 }
 
+
 Try<Nothing> limit_in_bytes(
     const std::string& hierarchy,
     const std::string& cgroup,
@@ -2356,6 +2359,7 @@ Try<Nothing> limit_in_bytes(
   }
   return Nothing();
 }
+
 
 Try<Nothing> limit_in_iops(
     const std::string& hierarchy,
@@ -2383,6 +2387,8 @@ Try<Nothing> limit_in_iops(
   return Nothing();
 }
 
+
 }  // namespace blkio {
+
 
 } // namespace cgroups {

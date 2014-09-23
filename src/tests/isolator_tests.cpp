@@ -23,7 +23,6 @@
 #include <iostream>
 #include <string>
 #include <vector>
-#include <boost/concept_check.hpp>
 
 #include <mesos/resources.hpp>
 
@@ -768,8 +767,8 @@ int performBlkIO(const Bytes& _size, size_t iops, int pipes[2])
 
   int fd = open(fname.c_str(), O_CREAT | O_RDWR | O_DIRECT, 0777);
   if (fd == -1) {
-    ostringstream err = "Error creating file " << os::getcwd()
-    << "blkio_usage_test";
+    ostringstream err;
+    err << "Error creating file " << os::getcwd() << "blkio_usage_test";
     perror(err.str().c_str());
     abort();
   }
@@ -999,15 +998,13 @@ TEST_F(BlkIOIsolatorTest, ROOT_CGROUPS_BlkIOIOPS)
     // If we meet our write usage expectations.
     if (!done_writes &&
       statistics.disk_write_total_bytes() >= bytes_threshold.bytes() &&
-      statistics.disk_write_total_iops() >= iops_threshold
-    ) {
+      statistics.disk_write_total_iops() >= iops_threshold) {
       done_writes = true;
       waited_for_write = waited;
     }
     if (!done_reads &&
       statistics.disk_read_total_bytes() >= bytes_threshold.bytes() &&
-      statistics.disk_read_total_iops() >= iops_threshold
-    ) {
+      statistics.disk_read_total_iops() >= iops_threshold) {
       done_reads = true;
       waited_for_read = waited - waited_for_write;
     }
