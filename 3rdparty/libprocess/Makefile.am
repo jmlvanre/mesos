@@ -39,6 +39,7 @@ libprocess_la_SOURCES =		\
   src/metrics/metrics.cpp	\
   src/pid.cpp			\
   src/process.cpp		\
+  src/process_reference.hpp	\
   src/reap.cpp			\
   src/subprocess.cpp		\
   src/synchronized.hpp		\

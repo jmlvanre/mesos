@@ -58,7 +58,6 @@
 #include <process/mime.hpp>
 #include <process/node.hpp>
 #include <process/process.hpp>
-#include <process/process_reference.hpp>
 #include <process/profiler.hpp>
 #include <process/socket.hpp>
 #include <process/statistics.hpp>
@@ -83,6 +82,7 @@
 #include "decoder.hpp"
 #include "encoder.hpp"
 #include "gate.hpp"
+#include "process_reference.hpp"
 #include "synchronized.hpp"
 
 using namespace process::metrics::internal;

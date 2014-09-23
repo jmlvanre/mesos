@@ -1,5 +1,5 @@
-#ifndef __PROCESS_PROCESS_REFERENCE_HPP__
-#define __PROCESS_PROCESS_REFERENCE_HPP__
+#ifndef PROCESS_REFERENCE_HPP
+#define PROCESS_REFERENCE_HPP
 
 #include <process/process.hpp>
 
@@ -81,4 +81,4 @@ private:
 
 } // namespace process {
 
-#endif // __PROCESS_PROCESS_REFERENCE_HPP__
+#endif // PROCESS_REFERENCE_HPP
