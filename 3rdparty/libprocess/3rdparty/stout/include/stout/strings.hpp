@@ -191,7 +191,6 @@ inline std::map<std::string, std::vector<std::string> > pairs(
 
 namespace internal {
 
-
 inline std::stringstream& append(
     std::stringstream& ss,
     const std::string& val)
@@ -251,7 +250,6 @@ std::stringstream& join(
   return ss;
 }
 
-
 } // namespace internal {
 
 
@@ -266,6 +264,10 @@ std::stringstream& join(
 }
 
 
+// Use 2 heads here to disambiguate variadic argument join from the
+// templatized Iterable join below. This means this implementation of
+// strings::join() is only activated if there are 2 or more things to
+// join.
 template <typename THead1, typename THead2, typename ...TTail>
 std::string join(
     const std::string& separator,
