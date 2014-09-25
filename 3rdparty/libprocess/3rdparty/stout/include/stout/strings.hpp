@@ -276,7 +276,8 @@ std::string join(
     TTail&&... tail)
 {
   std::stringstream stream;
-  internal::join(stream,
+  internal::join(
+      stream,
       separator,
       std::forward<THead1>(head1),
       std::forward<THead2>(head2),
