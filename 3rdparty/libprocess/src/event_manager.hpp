@@ -12,7 +12,6 @@ public:
 
 protected:
   EventManager() {}
-
 };
 
 } // namespace process {

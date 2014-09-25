@@ -21,7 +21,6 @@ public:
 
 protected:
   EventManager() {}
-
 };
 
 }  // namespace internal {
