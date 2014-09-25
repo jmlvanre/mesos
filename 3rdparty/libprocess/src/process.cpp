@@ -81,6 +81,8 @@
 #include "config.hpp"
 #include "decoder.hpp"
 #include "encoder.hpp"
+#include "event_manager.hpp"
+#include "http_proxy.hpp"
 #include "gate.hpp"
 #include "process_reference.hpp"
 #include "synchronized.hpp"
@@ -138,79 +140,6 @@ map<string, string> types;
 
 } // namespace mime {
 
-
-// Provides a process that manages sending HTTP responses so as to
-// satisfy HTTP/1.1 pipelining. Each request should either enqueue a
-// response, or ask the proxy to handle a future response. The process
-// is responsible for making sure the responses are sent in the same
-// order as the requests. Note that we use a 'Socket' in order to keep
-// the underyling file descriptor from getting closed while there
-// might still be outstanding responses even though the client might
-// have closed the connection (see more discussion in
-// SocketManger::close and SocketManager::proxy).
-class HttpProxy : public Process<HttpProxy>
-{
-public:
-  explicit HttpProxy(const Socket& _socket);
-  virtual ~HttpProxy();
-
-  // Enqueues the response to be sent once all previously enqueued
-  // responses have been processed (e.g., waited for and sent).
-  void enqueue(const Response& response, const Request& request);
-
-  // Enqueues a future to a response that will get waited on (up to
-  // some timeout) and then sent once all previously enqueued
-  // responses have been processed (e.g., waited for and sent).
-  void handle(Future<Response>* future, const Request& request);
-
-private:
-  // Starts "waiting" on the next available future response.
-  void next();
-
-  // Invoked once a future response has been satisfied.
-  void waited(const Future<Response>& future);
-
-  // Demuxes and handles a response.
-  bool process(const Future<Response>& future, const Request& request);
-
-  // Handles stream (i.e., pipe) based responses.
-  void stream(const Future<short>& poll, const Request& request);
-
-  Socket socket; // Wrap the socket to keep it from getting closed.
-
-  // Describes a queue "item" that wraps the future to the response
-  // and the original request.
-  // The original request contains needed information such as what encodings
-  // are acceptable and whether to persist the connection.
-  struct Item
-  {
-    Item(const Request& _request, Future<Response>* _future)
-      : request(_request), future(_future) {}
-
-    ~Item()
-    {
-      delete future;
-    }
-
-    // Helper for cleaning up a response (i.e., closing any open pipes
-    // in the event Response::type is PIPE).
-    static void cleanup(const Response& response)
-    {
-      if (response.type == Response::PIPE) {
-        os::close(response.pipe);
-      }
-    }
-
-    const Request request; // Make a copy.
-    Future<Response>* future;
-  };
-
-  queue<Item*> items;
-
-  Option<int> pipe; // Current pipe, if streaming.
-};
-
-
 // Helper for creating routes without a process.
 // TODO(benh): Move this into route.hpp.
 class Route
@@ -261,11 +190,11 @@ private:
 };
 
 
-class SocketManager
+class SocketManager : public EventManager
 {
 public:
   SocketManager();
-  ~SocketManager();
+  virtual ~SocketManager();
 
   Socket accepted(int s);
 
@@ -273,10 +202,10 @@ public:
 
   PID<HttpProxy> proxy(const Socket& socket);
 
-  void send(Encoder* encoder, bool persist);
-  void send(const Response& response,
+  virtual void send(Encoder* encoder, bool persist) override;
+  virtual void send(const Response& response,
             const Request& request,
-            const Socket& socket);
+            const Socket& socket) override;
   void send(Message* message);
 
   Encoder* next(int s);
@@ -1687,250 +1616,6 @@ uint16_t port()
 }
 
 
-HttpProxy::HttpProxy(const Socket& _socket)
-  : ProcessBase(ID::generate("__http__")),
-    socket(_socket) {}
-
-
-HttpProxy::~HttpProxy()
-{
-  // Need to make sure response producers know not to continue to
-  // create a response (streaming or otherwise).
-  if (pipe.isSome()) {
-    os::close(pipe.get());
-  }
-  pipe = None();
-
-  while (!items.empty()) {
-    Item* item = items.front();
-
-    // Attempt to discard the future.
-    item->future->discard();
-
-    // But it might have already been ready. In general, we need to
-    // wait until this future is potentially ready in order to attempt
-    // to close a pipe if one exists.
-    item->future->onReady(lambda::bind(&Item::cleanup, lambda::_1));
-
-    items.pop();
-    delete item;
-  }
-}
-
-
-void HttpProxy::enqueue(const Response& response, const Request& request)
-{
-  handle(new Future<Response>(response), request);
-}
-
-
-void HttpProxy::handle(Future<Response>* future, const Request& request)
-{
-  items.push(new Item(request, future));
-
-  if (items.size() == 1) {
-    next();
-  }
-}
-
-
-void HttpProxy::next()
-{
-  if (items.size() > 0) {
-    // Wait for any transition of the future.
-    items.front()->future->onAny(
-        defer(self(), &HttpProxy::waited, lambda::_1));
-  }
-}
-
-
-void HttpProxy::waited(const Future<Response>& future)
-{
-  CHECK(items.size() > 0);
-  Item* item = items.front();
-
-  CHECK(future == *item->future);
-
-  // Process the item and determine if we're done or not (so we know
-  // whether to start waiting on the next responses).
-  bool processed = process(*item->future, item->request);
-
-  items.pop();
-  delete item;
-
-  if (processed) {
-    next();
-  }
-}
-
-
-bool HttpProxy::process(const Future<Response>& future, const Request& request)
-{
-  if (!future.isReady()) {
-    // TODO(benh): Consider handling other "states" of future
-    // (discarded, failed, etc) with different HTTP statuses.
-    socket_manager->send(ServiceUnavailable(), request, socket);
-    return true; // All done, can process next response.
-  }
-
-  Response response = future.get();
-
-  // If the response specifies a path, try and perform a sendfile.
-  if (response.type == Response::PATH) {
-    // Make sure no body is sent (this is really an error and
-    // should be reported and no response sent.
-    response.body.clear();
-
-    const string& path = response.path;
-    int fd = open(path.c_str(), O_RDONLY);
-    if (fd < 0) {
-      if (errno == ENOENT || errno == ENOTDIR) {
-          VLOG(1) << "Returning '404 Not Found' for path '" << path << "'";
-          socket_manager->send(NotFound(), request, socket);
-      } else {
-        const char* error = strerror(errno);
-        VLOG(1) << "Failed to send file at '" << path << "': " << error;
-        socket_manager->send(InternalServerError(), request, socket);
-      }
-    } else {
-      struct stat s; // Need 'struct' because of function named 'stat'.
-      if (fstat(fd, &s) != 0) {
-        const char* error = strerror(errno);
-        VLOG(1) << "Failed to send file at '" << path << "': " << error;
-        socket_manager->send(InternalServerError(), request, socket);
-      } else if (S_ISDIR(s.st_mode)) {
-        VLOG(1) << "Returning '404 Not Found' for directory '" << path << "'";
-        socket_manager->send(NotFound(), request, socket);
-      } else {
-        // While the user is expected to properly set a 'Content-Type'
-        // header, we fill in (or overwrite) 'Content-Length' header.
-        stringstream out;
-        out << s.st_size;
-        response.headers["Content-Length"] = out.str();
-
-        if (s.st_size == 0) {
-          socket_manager->send(response, request, socket);
-          return true; // All done, can process next request.
-        }
-
-        VLOG(1) << "Sending file at '" << path << "' with length " << s.st_size;
-
-        // TODO(benh): Consider a way to have the socket manager turn
-        // on TCP_CORK for both sends and then turn it off.
-        socket_manager->send(
-            new HttpResponseEncoder(socket, response, request),
-            true);
-
-        // Note the file descriptor gets closed by FileEncoder.
-        socket_manager->send(
-            new FileEncoder(socket, fd, s.st_size),
-            request.keepAlive);
-      }
-    }
-  } else if (response.type == Response::PIPE) {
-    // Make sure no body is sent (this is really an error and
-    // should be reported and no response sent.
-    response.body.clear();
-
-    // Make sure the pipe is nonblocking.
-    Try<Nothing> nonblock = os::nonblock(response.pipe);
-    if (nonblock.isError()) {
-      const char* error = strerror(errno);
-      VLOG(1) << "Failed make pipe nonblocking: " << error;
-      socket_manager->send(InternalServerError(), request, socket);
-      return true; // All done, can process next response.
-    }
-
-    // While the user is expected to properly set a 'Content-Type'
-    // header, we fill in (or overwrite) 'Transfer-Encoding' header.
-    response.headers["Transfer-Encoding"] = "chunked";
-
-    VLOG(1) << "Starting \"chunked\" streaming";
-
-    socket_manager->send(
-        new HttpResponseEncoder(socket, response, request),
-        true);
-
-    pipe = response.pipe;
-
-    io::poll(pipe.get(), io::READ).onAny(
-        defer(self(), &Self::stream, lambda::_1, request));
-
-    return false; // Streaming, don't process next response (yet)!
-  } else {
-    socket_manager->send(response, request, socket);
-  }
-
-  return true; // All done, can process next response.
-}
-
-
-void HttpProxy::stream(const Future<short>& poll, const Request& request)
-{
-  // TODO(benh): Use 'splice' on Linux.
-
-  CHECK(pipe.isSome());
-
-  bool finished = false; // Whether we're done streaming.
-
-  if (poll.isReady()) {
-    // Read and write.
-    CHECK(poll.get() == io::READ);
-    const size_t size = 4 * 1024; // 4K.
-    char data[size];
-    while (!finished) {
-      ssize_t length = ::read(pipe.get(), data, size);
-      if (length < 0 && (errno == EINTR)) {
-        // Interrupted, try again now.
-        continue;
-      } else if (length < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-        // Might block, try again later.
-        io::poll(pipe.get(), io::READ).onAny(
-            defer(self(), &Self::stream, lambda::_1, request));
-        break;
-      } else {
-        std::ostringstream out;
-        if (length <= 0) {
-          // Error or closed, treat both as closed.
-          if (length < 0) {
-            // Error.
-            const char* error = strerror(errno);
-            VLOG(1) << "Read error while streaming: " << error;
-          }
-          out << "0\r\n" << "\r\n";
-          finished = true;
-        } else {
-          // Data!
-          out << std::hex << length << "\r\n";
-          out.write(data, length);
-          out << "\r\n";
-        }
-
-        // We always persist the connection when we're not finished
-        // streaming.
-        socket_manager->send(
-            new DataEncoder(socket, out.str()),
-            finished ? request.keepAlive : true);
-      }
-    }
-  } else if (poll.isFailed()) {
-    VLOG(1) << "Failed to poll: " << poll.failure();
-    socket_manager->send(InternalServerError(), request, socket);
-    finished = true;
-  } else {
-    VLOG(1) << "Unexpected discarded future while polling";
-    socket_manager->send(InternalServerError(), request, socket);
-    finished = true;
-  }
-
-  if (finished) {
-    os::close(pipe.get());
-    pipe = None();
-    next();
-  }
-}
-
-
 SocketManager::SocketManager()
 {
   synchronizer(this) = SYNCHRONIZED_INITIALIZER_RECURSIVE;
@@ -2043,7 +1728,7 @@ PID<HttpProxy> SocketManager::proxy(const Socket& socket)
       if (proxies.count(socket) > 0) {
         return proxies[socket]->self();
       } else {
-        proxy = new HttpProxy(sockets[socket]);
+        proxy = new HttpProxy(sockets[socket], this);
         proxies[socket] = proxy;
       }
     }
