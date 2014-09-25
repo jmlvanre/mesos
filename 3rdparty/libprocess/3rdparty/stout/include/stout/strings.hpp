@@ -192,62 +192,62 @@ inline std::map<std::string, std::vector<std::string> > pairs(
 namespace internal {
 
 inline std::stringstream& append(
-    std::stringstream& ss,
-    const std::string& val)
+    std::stringstream& stream,
+    const std::string& value)
 {
-  ss << val;
-  return ss;
+  stream << value;
+  return stream;
 }
 
 
 inline std::stringstream& append(
-    std::stringstream& ss,
-    std::string&& val)
+    std::stringstream& stream,
+    std::string&& value)
 {
-  ss << val;
-  return ss;
+  stream << value;
+  return stream;
 }
 
 
 inline std::stringstream& append(
-    std::stringstream& ss,
-    const char*&& val)
+    std::stringstream& stream,
+    const char*&& value)
 {
-  ss << val;
-  return ss;
+  stream << value;
+  return stream;
 }
 
 
 template <typename T>
 std::stringstream& append(
-    std::stringstream& ss,
-    T&& val)
+    std::stringstream& stream,
+    T&& value)
 {
-  ss << ::stringify(std::forward<T>(val));
-  return ss;
+  stream << ::stringify(std::forward<T>(value));
+  return stream;
 }
 
 
 template <typename T>
 std::stringstream& join(
-    std::stringstream& ss,
+    std::stringstream& stream,
     const std::string& separator,
     T&& tail)
 {
-  return append(ss, std::forward<T>(tail));
+  return append(stream, std::forward<T>(tail));
 }
 
 
 template <typename THead, typename ...TTail>
 std::stringstream& join(
-    std::stringstream& ss,
+    std::stringstream& stream,
     const std::string& separator,
     THead&& head,
     TTail&&... tail)
 {
-  append(ss, std::forward<THead>(head)) << separator;
-  internal::join(ss, separator, std::forward<TTail>(tail)...);
-  return ss;
+  append(stream, std::forward<THead>(head)) << separator;
+  internal::join(stream, separator, std::forward<TTail>(tail)...);
+  return stream;
 }
 
 } // namespace internal {
@@ -255,12 +255,12 @@ std::stringstream& join(
 
 template <typename ...T>
 std::stringstream& join(
-    std::stringstream& ss,
+    std::stringstream& stream,
     const std::string& separator,
     T&&... args)
 {
-  internal::join(ss, separator, std::forward<T>(args)...);
-  return ss;
+  internal::join(stream, separator, std::forward<T>(args)...);
+  return stream;
 }
 
 
@@ -275,13 +275,13 @@ std::string join(
     THead2&& head2,
     TTail&&... tail)
 {
-  std::stringstream ss;
-  internal::join(ss,
-    separator,
-    std::forward<THead1>(head1),
-    std::forward<THead2>(head2),
-    std::forward<TTail>(tail)...);
-  return ss.str();
+  std::stringstream stream;
+  internal::join(stream,
+      separator,
+      std::forward<THead1>(head1),
+      std::forward<THead2>(head2),
+      std::forward<TTail>(tail)...);
+  return stream.str();
 }
 
 
