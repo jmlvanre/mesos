@@ -112,7 +112,6 @@ public:
   }
 
 private:
-
   T* t;
   #if __cplusplus >= 201103L
   alignas(T) char storage[sizeof(T)];
