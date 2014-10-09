@@ -27,60 +27,58 @@ class Option
 public:
   static Option<T> none()
   {
-    return Option<T>(NONE);
+    return Option<T>();
   }
 
   static Option<T> some(const T& t)
   {
-    return Option<T>(SOME, new T(t));
+    return Option<T>(t);
   }
 
-  Option() : state(NONE), t(NULL) {}
+  Option() : t(NULL) {}
 
-  Option(const T& _t) : state(SOME), t(new T(_t)) {}
+  Option(const T& _t) { t = new (storage) T(_t); }
 
-  template <typename U>
-  Option(const U& u) : state(SOME), t(new T(u)) {}
-
-  Option(const None& none) : state(NONE), t(NULL) {}
+  Option(T&& _t) { t = new (storage) T(std::move(_t)); }
 
   template <typename U>
-  Option(const _Some<U>& some) : state(SOME), t(new T(some.t)) {}
+  Option(const U& u) { t = new (storage) T(u); }
+
+  Option(const None& none) : t(NULL) {}
+
+  template <typename U>
+  Option(const _Some<U>& some) { t = new (storage) T(some.t); }
 
   Option(const Option<T>& that)
   {
-    state = that.state;
-    if (that.t != NULL) {
-      t = new T(*that.t);
+    t = that.t ? new (storage) T(*that.t) : NULL;
+  }
+
+  Option(Option<T>&& that)
+  {
+    if (that.t) {
+      t = new (storage) T(std::move(*that.t));
+      that.reset();
     } else {
       t = NULL;
     }
   }
 
-  ~Option()
-  {
-    delete t;
-  }
+  ~Option() { reset(); }
 
   Option<T>& operator = (const Option<T>& that)
   {
     if (this != &that) {
-      delete t;
-      state = that.state;
-      if (that.t != NULL) {
-        t = new T(*that.t);
-      } else {
-        t = NULL;
-      }
+      reset();
+      t = that.t ? new (storage) T(*that.t) : NULL;
     }
-
     return *this;
   }
 
   bool operator == (const Option<T>& that) const
   {
-    return (state == NONE && that.state == NONE) ||
-      (state == SOME && that.state == SOME && *t == *that.t);
+    return (isNone() && that.isNone()) ||
+      (isSome() && that.isSome() && *t == *that.t);
   }
 
   bool operator != (const Option<T>& that) const
@@ -90,7 +88,7 @@ public:
 
   bool operator == (const T& that) const
   {
-    return state == SOME && *t == that;
+    return isSome() && *t == that;
   }
 
   bool operator != (const T& that) const
@@ -98,25 +96,29 @@ public:
     return !operator == (that);
   }
 
-  bool isSome() const { return state == SOME; }
-  bool isNone() const { return state == NONE; }
+  bool isSome() const { return t != NULL; }
+  bool isNone() const { return t == NULL; }
 
-  const T& get() const { assert(state == SOME); return *t; }
+  const T& get() const { assert(t); return *t; }
 
   // This must return a copy to avoid returning a reference to a temporary.
-  T get(const T& _t) const { return state == NONE ? _t : *t; }
+  T get(const T& _t) const { return !t ? _t : *t; }
+
+  void reset() {
+    if (t) {
+      t->~T();
+      t = NULL;
+    }
+  }
 
 private:
-  enum State {
-    SOME,
-    NONE,
-  };
 
-  Option(State _state, T* _t = NULL)
-    : state(_state), t(_t) {}
-
-  State state;
   T* t;
+  #if __cplusplus >= 201103L
+  alignas(T) char storage[sizeof(T)];
+#else
+  char storage[sizeof(T)];
+#endif // __cplusplus >= 201103L
 };
 
 
