@@ -1673,6 +1673,11 @@ void initialize(const string& delegate)
 }
 
 
+void finalize() {
+  delete process_manager;
+}
+
+
 uint32_t ip()
 {
   process::initialize();
@@ -2435,7 +2440,18 @@ ProcessManager::ProcessManager(const string& _delegate)
 }
 
 
-ProcessManager::~ProcessManager() {}
+ProcessManager::~ProcessManager() {
+  ProcessBase* ptr = NULL;
+  do {
+    synchronized (processes) {
+      ptr = processes.size() ? processes.begin()->second : nullptr;
+    }
+    if (ptr) {
+      process::terminate(ptr);
+      process::wait(ptr);
+    }
+  } while (ptr != nullptr);
+}
 
 
 ProcessReference ProcessManager::use(const UPID& pid)
