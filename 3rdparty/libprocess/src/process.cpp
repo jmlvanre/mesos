@@ -507,6 +507,10 @@ ThreadLocal<ProcessBase>* _process_ = new ThreadLocal<ProcessBase>();
 // Per thread executor pointer.
 ThreadLocal<Executor>* _executor_ = new ThreadLocal<Executor>();
 
+static volatile bool inShutdown = false;
+static uint32_t didShutdown = 0;
+static list<pthread_t> workerThreads;
+
 // TODO(dhamon): Reintroduce this when it is plumbed through to Statistics.
 // const Duration LIBPROCESS_STATISTICS_WINDOW = Days(1);
 
@@ -1364,20 +1368,24 @@ void* serve(void* arg)
 
 void* schedule(void* arg)
 {
-  do {
-    ProcessBase* process = process_manager->dequeue();
+  bool keepGoing = true;
+  for (ProcessBase* process = process_manager->dequeue();
+       keepGoing || process;
+       process = process_manager->dequeue()) {
     if (process == NULL) {
       Gate::state_t old = gate->approach();
       process = process_manager->dequeue();
       if (process == NULL) {
         gate->arrive(old); // Wait at gate if idle.
+        keepGoing = !inShutdown;
         continue;
       } else {
         gate->leave();
       }
     }
     process_manager->resume(process);
-  } while (true);
+  }
+  __sync_fetch_and_add(&didShutdown, 1);
 }
 
 
@@ -1421,6 +1429,9 @@ void initialize(const string& delegate)
       return;
     }
   }
+
+  inShutdown = false;
+  __sync_lock_test_and_set(&didShutdown, 0);
 
 //   // Install signal handler.
 //   struct sigaction sa;
@@ -1469,6 +1480,8 @@ void initialize(const string& delegate)
     pthread_t thread; // For now, not saving handles on our threads.
     if (pthread_create(&thread, NULL, schedule, NULL) != 0) {
       LOG(FATAL) << "Failed to initialize, pthread_create";
+    } else {
+      workerThreads.push_back(thread);
     }
   }
 
@@ -1675,6 +1688,20 @@ void initialize(const string& delegate)
 
 void finalize()
 {
+  terminate(gc);
+  wait(gc);
+  inShutdown = true;
+  while (didShutdown != workerThreads.size()) {
+    gate->open();
+    usleep(1);
+  }
+  foreach(pthread_t thread, workerThreads) {
+    void* retval = NULL;
+    if (pthread_join(thread, &retval) < 0) {
+      LOG(FATAL) << "failed joining worker thread";
+    }
+  }
+  workerThreads.clear();
   delete process_manager;
 }
 
