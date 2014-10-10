@@ -34,6 +34,16 @@ protected:
     }
   }
 
+  virtual void finalize()
+  {
+    foreachpair(const UPID& pid, const ProcessBase* process, processes) {
+      terminate(pid);
+      wait(pid);
+      delete process;
+    }
+    processes.clear();
+  }
+
 private:
   std::map<UPID, const ProcessBase*> processes;
 };
