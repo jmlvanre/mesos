@@ -329,6 +329,9 @@ public:
   explicit ProcessManager(const string& delegate);
   ~ProcessManager();
 
+  // Terminate any outstanding processes.
+  void finalize();
+
   ProcessReference use(const UPID& pid);
 
   bool handle(
@@ -361,6 +364,7 @@ public:
   Future<Response> __processes__(const Request&);
 
 private:
+
   // Delegate process name to receive root HTTP requests.
   const string delegate;
 
@@ -1690,6 +1694,7 @@ void finalize()
 {
   terminate(gc);
   wait(gc);
+  process_manager->finalize();
   inShutdown = true;
   while (didShutdown != workerThreads.size()) {
     gate->open();
@@ -2468,7 +2473,7 @@ ProcessManager::ProcessManager(const string& _delegate)
 }
 
 
-ProcessManager::~ProcessManager()
+void ProcessManager::finalize()
 {
   ProcessBase* process = NULL;
   // Pop a process off the top and terminate it. Don't hold the lock
@@ -2484,6 +2489,9 @@ ProcessManager::~ProcessManager()
     }
   } while (process != NULL);
 }
+
+
+ProcessManager::~ProcessManager() {}
 
 
 ProcessReference ProcessManager::use(const UPID& pid)
