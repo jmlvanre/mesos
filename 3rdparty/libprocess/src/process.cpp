@@ -1673,7 +1673,8 @@ void initialize(const string& delegate)
 }
 
 
-void finalize() {
+void finalize()
+{
   delete process_manager;
 }
 
@@ -2440,17 +2441,21 @@ ProcessManager::ProcessManager(const string& _delegate)
 }
 
 
-ProcessManager::~ProcessManager() {
-  ProcessBase* ptr = NULL;
+ProcessManager::~ProcessManager()
+{
+  ProcessBase* process = NULL;
+  // Pop a process off the top and terminate it. Don't hold the lock
+  // or process the whole map as terminating one process might
+  // trigger other terminations. Deal with them one at a time.
   do {
     synchronized (processes) {
-      ptr = processes.size() ? processes.begin()->second : nullptr;
+      process = !processes.empty() ? processes.begin()->second : NULL;
     }
-    if (ptr) {
-      process::terminate(ptr);
-      process::wait(ptr);
+    if (process != NULL) {
+      process::terminate(process);
+      process::wait(process);
     }
-  } while (ptr != nullptr);
+  } while (process != NULL);
 }
 
 

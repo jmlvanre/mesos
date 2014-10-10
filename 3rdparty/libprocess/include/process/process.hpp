@@ -270,7 +270,7 @@ void initialize(const std::string& delegate = "");
 
 
 /**
- * clean up the library.
+ * Clean up the library.
  */
 void finalize();
 
