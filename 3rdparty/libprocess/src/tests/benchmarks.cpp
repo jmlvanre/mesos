@@ -62,13 +62,13 @@ class BenchmarkProcess : public Process<BenchmarkProcess>
 {
 public:
   BenchmarkProcess(
-      size_t _numIter = 1,
+      size_t _iterations = 1,
       size_t _maxOutstanding = 1,
       const Option<UPID>& _other = Option<UPID>())
       : other(_other),
         counter(0UL),
         done(false),
-        numIter(_numIter),
+        iterations(_iterations),
         maxOutstanding(_maxOutstanding),
         outstanding(0),
         sent(0)
@@ -92,9 +92,9 @@ public:
 
   void start() {
     sendRemaining();
-    unique_lock<mutex> lock(mut);
+    unique_lock<mutex> lock(_mutex);
     while (!done) {
-      cond.wait(lock);
+      condition.wait(lock);
     }
   }
 
@@ -113,10 +113,10 @@ private:
   {
     ++counter;
     --outstanding;
-    if (counter >= numIter) {
-      lock_guard<mutex> lock(mut);
+    if (counter >= iterations) {
+      lock_guard<mutex> lock(_mutex);
       done = true;
-      cond.notify_one();
+      condition.notify_one();
     }
     sendRemaining();
   }
@@ -124,7 +124,7 @@ private:
   void sendRemaining()
   {
     static const string message("hi");
-    for (;outstanding < maxOutstanding && sent < numIter;
+    for (;outstanding < maxOutstanding && sent < iterations;
          ++outstanding, ++sent) {
       send(other.get(), "ping", message.c_str(), message.size());
     }
@@ -135,10 +135,10 @@ private:
   size_t counter;
 
   bool done;
-  mutex mut;
-  condition_variable cond;
+  mutex _mutex;
+  condition_variable condition;
 
-  const size_t numIter;
+  const size_t iterations;
   const size_t maxOutstanding;
   size_t outstanding;
   size_t sent;
@@ -146,9 +146,9 @@ private:
 };
 
 
-void benchmarkLauncher(size_t numIter, size_t queueDepth, UPID other)
+void benchmarkLauncher(size_t iterations, size_t queueDepth, UPID other)
 {
-  BenchmarkProcess process(numIter, queueDepth, other);
+  BenchmarkProcess process(iterations, queueDepth, other);
   UPID pid = spawn(&process);
   process.start();
   terminate(process);
@@ -156,24 +156,25 @@ void benchmarkLauncher(size_t numIter, size_t queueDepth, UPID other)
 }
 
 
-/* Launch numProcs processes, each with numClients 'client' Actors.
- * Play ping pong back and forth between these actors and the main
- * 'server' actor. Each 'client' can have queueDepth ping requests
- * outstanding to the 'server' actor. */
+// Launch numberOfProcesses processes, each with clients 'client'
+// Actors. Play ping pong back and forth between these actors and the
+// main 'server' actor. Each 'client' can have queueDepth ping
+// requests outstanding to the 'server' actor.
 TEST(Process, Process_BENCHMARK_Test)
 {
-  const size_t numIter = 2500;
+  const size_t iterations = 2500;
   const size_t queueDepth = 250;
-  const size_t numClients = 8;
-  const size_t numProcs = 4;
+  const size_t clients = 8;
+  const size_t numberOfProcesses = 4;
 
-  vector<int> outPipeVec;
-  vector<int> inPipeVec;
-  vector<pid_t> pidVec;
-  for (int64_t moreToLaunch = numProcs; moreToLaunch >= 0; --moreToLaunch) {
-    // fork in order to get numProcs seperate ProcessManagers. This
-    // avoids the short-circuit built into ProcessManager for
-    // processes communicating in the same manager.
+  vector<int> outPipeVector;
+  vector<int> inPipeVector;
+  vector<pid_t> pidVector;
+  for (int64_t moreToLaunch = numberOfProcesses;
+       moreToLaunch >= 0; --moreToLaunch) {
+    // fork in order to get numberOfProcesses seperate
+    // ProcessManagers. This avoids the short-circuit built into
+    // ProcessManager for processes communicating in the same manager.
     int pipes[2];
     pid_t pid = -1;
     if(pipe(pipes) < 0) {
@@ -186,65 +187,97 @@ TEST(Process, Process_BENCHMARK_Test)
       perror("fork() failed");
       abort();
     } else if (pid == 0) {
-      // child
-      int32_t strsize = 0;
-      size_t r = read(pipes[0], &strsize, sizeof(strsize));
-      EXPECT_EQ(r, sizeof(strsize));
-      char buf[strsize];
-      memset(&buf, 0, strsize);
-      r = read(pipes[0], &buf, strsize);
-      EXPECT_EQ(r, strsize);
-      istringstream iss(buf);
+      // Child.
+
+      // Read the number of bytes about to be parsed.
+      int32_t stringSize = 0;
+      size_t result = read(pipes[0], &stringSize, sizeof(stringSize));
+      EXPECT_EQ(result, sizeof(stringSize));
+      char buffer[stringSize];
+      memset(&buffer, 0, stringSize);
+
+      // Read in the upid of the 'server' actor.
+      result = read(pipes[0], &buffer, stringSize);
+      EXPECT_EQ(result, stringSize);
+      istringstream inStream(buffer);
       UPID other;
-      iss >> other;
+      inStream >> other;
+
+      // Launch a thread for each client that backs an actor.
       Stopwatch watch;
       watch.start();
-      vector<thread> tvec;
-      for (size_t i = 0; i < numClients; ++i) {
-        tvec.emplace_back(benchmarkLauncher, numIter, queueDepth, other);
+      vector<thread> threadVector;
+      for (size_t i = 0; i < clients; ++i) {
+        threadVector.emplace_back(
+            benchmarkLauncher,
+            iterations,
+            queueDepth,
+            other);
       }
-      foreach (auto& t, tvec) {
-        t.join();
+
+      // Wait for the clients to finish and join on them.
+      foreach (auto& thread, threadVector) {
+        thread.join();
       }
+
+      // Compute the total rpcs per second for this process, write the
+      // computation back to the server end of the fork.
       double elapsed = watch.elapsed().secs();
-      size_t totalIter = numClients * numIter;
-      size_t rpcPerSec = totalIter / elapsed;
-      r = write(pipes[1], &rpcPerSec, sizeof(rpcPerSec));
-      EXPECT_EQ(r, sizeof(rpcPerSec));
+      size_t totalIterations = clients * iterations;
+      size_t rpcPerSecond = totalIterations / elapsed;
+      result = write(pipes[1], &rpcPerSecond, sizeof(rpcPerSecond));
+      EXPECT_EQ(result, sizeof(rpcPerSecond));
       close(pipes[0]);
       exit(0);
     } else {
-      // parent
-      outPipeVec.emplace_back(pipes[1]);
-      inPipeVec.emplace_back(pipes[0]);
-      pidVec.emplace_back(pid);
+      // Parent.
+
+      // Keep track of the pipes to the child forks. This way the
+      // results of their rpc / sec computations can be read back and
+      // aggregated.
+      outPipeVector.emplace_back(pipes[1]);
+      inPipeVector.emplace_back(pipes[0]);
+      pidVector.emplace_back(pid);
+
+      // If this is the last child launched, then let the parent
+      // become the 'server' actor.
       if (moreToLaunch <= 0) {
-        BenchmarkProcess process(numIter, queueDepth);
+        BenchmarkProcess process(iterations, queueDepth);
         UPID pid = spawn(&process);
-        ostringstream ss;
-        ss << pid;
-        int32_t strsize = ss.str().size();
-        foreach (int fd, outPipeVec) {
-          size_t w = write(fd, &strsize, sizeof(strsize));
-          EXPECT_EQ(w, sizeof(strsize));
-          w = write(fd, ss.str().c_str(), strsize);
-          EXPECT_EQ(w, strsize);
+
+        // Stringify the server pid to send to the child processes.
+        ostringstream outStream;
+        outStream << pid;
+        int32_t stringSize = outStream.str().size();
+
+        // For each child, write the size of the stringified pid as
+        // well as the stringified pid to the pipe.
+        foreach (int fd, outPipeVector) {
+          size_t result = write(fd, &stringSize, sizeof(stringSize));
+          EXPECT_EQ(result, sizeof(stringSize));
+          result = write(fd, outStream.str().c_str(), stringSize);
+          EXPECT_EQ(result, stringSize);
           close(fd);
         }
-        size_t totalRpcsPerSec = 0;
-        foreach (int fd, inPipeVec) {
+
+        // Read the resulting rpcs / second from the child processes
+        // and aggregate the results.
+        size_t totalRpcsPerSecond = 0;
+        foreach (int fd, inPipeVector) {
           size_t rpcs = 0;
-          size_t r = read(fd, &rpcs, sizeof(rpcs));
-          EXPECT_EQ(r, sizeof(rpcs));
-          if (r != sizeof(rpcs)) {
+          size_t result = read(fd, &rpcs, sizeof(rpcs));
+          EXPECT_EQ(result, sizeof(rpcs));
+          if (result != sizeof(rpcs)) {
             abort();
           }
-          totalRpcsPerSec += rpcs;
+          totalRpcsPerSecond += rpcs;
         }
-        foreach (const auto& p, pidVec) {
-          ::waitpid(p, nullptr, 0);
+
+        // Wait for all the child forks to terminately gracefully.
+        foreach (const auto& p, pidVector) {
+          ::waitpid(p, NULL, 0);
         }
-        printf("Total: [%ld] rpcs / s\n", totalRpcsPerSec);
+        printf("Total: [%ld] rpcs / s\n", totalRpcsPerSecond);
         terminate(process);
         wait(process);
       }
