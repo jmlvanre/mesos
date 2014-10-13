@@ -19,7 +19,7 @@ public:
   {
     const ProcessBase* process = t;
     if (process != NULL) {
-      processes[process->self()] = process;
+      processes[process->self()] = std::unique_ptr<const ProcessBase>(process);
       link(process->self());
     }
   }
@@ -27,25 +27,27 @@ public:
 protected:
   virtual void exited(const UPID& pid)
   {
-    if (processes.count(pid) > 0) {
-      const ProcessBase* process = processes[pid];
-      processes.erase(pid);
-      delete process;
+    auto iter = processes.find(pid);
+    if (iter != processes.end()) {
+      processes.erase(iter);
     }
   }
 
   virtual void finalize()
   {
-    foreachpair(const UPID& pid, const ProcessBase* process, processes) {
+    foreachpair(
+        const UPID& pid,
+        std::unique_ptr<const ProcessBase> &process,
+        processes) {
       terminate(pid);
       wait(pid);
-      delete process;
+      process.reset();
     }
     processes.clear();
   }
 
 private:
-  std::map<UPID, const ProcessBase*> processes;
+  std::map<UPID, std::unique_ptr<const ProcessBase>> processes;
 };
 
 
