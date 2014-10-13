@@ -24,7 +24,6 @@
 #include <mutex>
 #include <thread>
 #include <unordered_set>
-#include <boost/concept_check.hpp>
 
 #include <process/gmock.hpp>
 #include <process/gtest.hpp>
@@ -106,7 +105,7 @@ private:
       setlink(from);
       linkedPorts.emplace(from.port);
     }
-    static const std::string message("hi");
+    static const string message("hi");
     send(from, "pong", message.c_str(), message.size());
   }
 
@@ -124,7 +123,7 @@ private:
 
   void sendRemaining()
   {
-    static const std::string message("hi");
+    static const string message("hi");
     for (;outstanding < maxOutstanding && sent < numIter;
          ++outstanding, ++sent) {
       send(other.get(), "ping", message.c_str(), message.size());
