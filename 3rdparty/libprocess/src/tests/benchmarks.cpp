@@ -1,3 +1,21 @@
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <gtest/gtest.h>
 
 #include <gmock/gmock.h>
@@ -6,6 +24,7 @@
 #include <mutex>
 #include <thread>
 #include <unordered_set>
+#include <boost/concept_check.hpp>
 
 #include <process/gmock.hpp>
 #include <process/gtest.hpp>
@@ -44,14 +63,14 @@ class BenchmarkProcess : public Process<BenchmarkProcess>
 {
 public:
   BenchmarkProcess(
-      size_t _num_iter = 1,
-      size_t _max_outstanding = 1,
+      size_t _numIter = 1,
+      size_t _maxOutstanding = 1,
       const Option<UPID>& _other = Option<UPID>())
       : other(_other),
         counter(0UL),
         done(false),
-        num_iter(_num_iter),
-        max_outstanding(_max_outstanding),
+        numIter(_numIter),
+        maxOutstanding(_maxOutstanding),
         outstanding(0),
         sent(0)
   {
@@ -60,8 +79,7 @@ public:
     }
   }
 
-  virtual ~BenchmarkProcess() {
-  }
+  virtual ~BenchmarkProcess() {}
 
   virtual void initialize()
   {
@@ -74,11 +92,7 @@ public:
   }
 
   void start() {
-    const char* msg = "hi";
-    for (;outstanding < max_outstanding &&
-        sent < num_iter; ++outstanding, ++sent) {
-      send(other.get(), "ping", msg, strlen(msg));
-    }
+    sendRemaining();
     unique_lock<mutex> lock(mut);
     while (!done) {
       cond.wait(lock);
@@ -86,27 +100,34 @@ public:
   }
 
 private:
-  void ping(const UPID& from, const string& body) {
-    if (linked_ports.find(from.port) == linked_ports.end()) {
+  void ping(const UPID& from, const string& body)
+  {
+    if (linkedPorts.find(from.port) == linkedPorts.end()) {
       setlink(from);
-      linked_ports.emplace(from.port);
+      linkedPorts.emplace(from.port);
     }
-    const char* msg = "hi";
-    send(from, "pong", msg, strlen(msg));
+    static const std::string message("hi");
+    send(from, "pong", message.c_str(), message.size());
   }
 
-  void pong(const UPID& from, const string& body) {
+  void pong(const UPID& from, const string& body)
+  {
     ++counter;
     --outstanding;
-    if (counter >= num_iter) {
+    if (counter >= numIter) {
       lock_guard<mutex> lock(mut);
       done = true;
       cond.notify_one();
     }
-    const char* msg = "hi";
-    for (;outstanding < max_outstanding &&
-        sent < num_iter; ++outstanding, ++sent) {
-      send(other.get(), "ping", msg, strlen(msg));
+    sendRemaining();
+  }
+
+  void sendRemaining()
+  {
+    static const std::string message("hi");
+    for (;outstanding < maxOutstanding && sent < numIter;
+         ++outstanding, ++sent) {
+      send(other.get(), "ping", message.c_str(), message.size());
     }
   }
 
@@ -118,26 +139,40 @@ private:
   mutex mut;
   condition_variable cond;
 
-  const size_t num_iter;
-  const size_t max_outstanding;
+  const size_t numIter;
+  const size_t maxOutstanding;
   size_t outstanding;
   size_t sent;
-  unordered_set<int> linked_ports;
+  unordered_set<int> linkedPorts;
 };
 
 
+void benchmarkLauncher(size_t numIter, size_t queueDepth, UPID other)
+{
+  BenchmarkProcess process(numIter, queueDepth, other);
+  UPID pid = spawn(&process);
+  process.start();
+  terminate(process);
+  wait(process);
+}
+
+
+/* Launch numProcs processes, each with numClients 'client' Actors.
+ * Play ping pong back and forth between these actors and the main
+ * 'server' actor. Each 'client' can have queueDepth ping requests
+ * outstanding to the 'server' actor. */
 TEST(Process, Process_BENCHMARK_Test)
 {
-  const size_t num_iter = 2500;
-  const size_t queue_depth = 250;
-  const size_t num_threads = 8;
-  const size_t num_proc = 4;
+  const size_t numIter = 2500;
+  const size_t queueDepth = 250;
+  const size_t numClients = 8;
+  const size_t numProcs = 4;
 
-  vector<int> out_pipe_vec;
-  vector<int> in_pipe_vec;
-  vector<pid_t> pid_vec;
-  function<void (size_t)> do_fork = [&](size_t more_to_launch) {
-    // fork in order to get num_proc seperate ProcessManagers. This
+  vector<int> outPipeVec;
+  vector<int> inPipeVec;
+  vector<pid_t> pidVec;
+  for (int64_t moreToLaunch = numProcs; moreToLaunch >= 0; --moreToLaunch) {
+    // fork in order to get numProcs seperate ProcessManagers. This
     // avoids the short-circuit built into ProcessManager for
     // processes communicating in the same manager.
     int pipes[2];
@@ -163,67 +198,57 @@ TEST(Process, Process_BENCHMARK_Test)
       istringstream iss(buf);
       UPID other;
       iss >> other;
-      auto launcher = [&]() {
-        BenchmarkProcess process(num_iter, queue_depth, other);
-        UPID pid = spawn(&process);
-        process.start();
-        terminate(process);
-        wait(process);
-      };
       Stopwatch watch;
       watch.start();
       vector<thread> tvec;
-      for (size_t i = 0; i < num_threads; ++i) {
-        tvec.emplace_back(launcher);
+      for (size_t i = 0; i < numClients; ++i) {
+        tvec.emplace_back(benchmarkLauncher, numIter, queueDepth, other);
       }
-      for (auto &t : tvec) {
+      foreach (auto& t, tvec) {
         t.join();
       }
       double elapsed = watch.elapsed().secs();
-      size_t total_iter = num_threads * num_iter;
-      size_t rpc_per_sec = total_iter / elapsed;
-      r = write(pipes[1], &rpc_per_sec, sizeof(rpc_per_sec));
-      EXPECT_EQ(r, sizeof(rpc_per_sec));
+      size_t totalIter = numClients * numIter;
+      size_t rpcPerSec = totalIter / elapsed;
+      r = write(pipes[1], &rpcPerSec, sizeof(rpcPerSec));
+      EXPECT_EQ(r, sizeof(rpcPerSec));
       close(pipes[0]);
       exit(0);
     } else {
       // parent
-      out_pipe_vec.emplace_back(pipes[1]);
-      in_pipe_vec.emplace_back(pipes[0]);
-      pid_vec.emplace_back(pid);
-      if (more_to_launch <= 1) {
-        BenchmarkProcess process(num_iter, queue_depth);
+      outPipeVec.emplace_back(pipes[1]);
+      inPipeVec.emplace_back(pipes[0]);
+      pidVec.emplace_back(pid);
+      if (moreToLaunch <= 0) {
+        BenchmarkProcess process(numIter, queueDepth);
         UPID pid = spawn(&process);
         ostringstream ss;
         ss << pid;
         int32_t strsize = ss.str().size();
-        for (auto fd : out_pipe_vec) {
+        foreach (int fd, outPipeVec) {
           size_t w = write(fd, &strsize, sizeof(strsize));
           EXPECT_EQ(w, sizeof(strsize));
           w = write(fd, ss.str().c_str(), strsize);
           EXPECT_EQ(w, strsize);
           close(fd);
         }
-        size_t total_rpcs_per_sec = 0;
-        for (auto fd : in_pipe_vec) {
+        size_t totalRpcsPerSec = 0;
+        foreach (int fd, inPipeVec) {
           size_t rpcs = 0;
           size_t r = read(fd, &rpcs, sizeof(rpcs));
           EXPECT_EQ(r, sizeof(rpcs));
           if (r != sizeof(rpcs)) {
             abort();
           }
-          total_rpcs_per_sec += rpcs;
+          totalRpcsPerSec += rpcs;
         }
-        for (const auto &p : pid_vec) {
+        foreach (const auto& p, pidVec) {
           ::waitpid(p, nullptr, 0);
         }
-        printf("Total: [%ld] rpcs / s\n", total_rpcs_per_sec);
+        printf("Total: [%ld] rpcs / s\n", totalRpcsPerSec);
         terminate(process);
         wait(process);
-      } else {
-        do_fork(more_to_launch - 1);
       }
     }
-  };
-  do_fork(num_proc);
+  }
 }
