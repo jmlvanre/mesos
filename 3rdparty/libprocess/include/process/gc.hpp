@@ -27,7 +27,7 @@ public:
 protected:
   virtual void exited(const UPID& pid)
   {
-    auto iter = processes.find(pid);
+    const auto& iter = processes.find(pid);
     if (iter != processes.end()) {
       processes.erase(iter);
     }
@@ -37,7 +37,7 @@ protected:
   {
     foreachpair(
         const UPID& pid,
-        std::unique_ptr<const ProcessBase> &process,
+        std::unique_ptr<const ProcessBase>& process,
         processes) {
       terminate(pid);
       wait(pid);
