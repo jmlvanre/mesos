@@ -1488,9 +1488,8 @@ void initialize(const string& delegate)
     pthread_t thread; // For now, not saving handles on our threads.
     if (pthread_create(&thread, NULL, schedule, NULL) != 0) {
       LOG(FATAL) << "Failed to initialize, pthread_create";
-    } else {
-      workerThreads().push_back(thread);
     }
+    workerThreads().push_back(thread);
   }
 
   __ip__ = 0;
@@ -1700,14 +1699,16 @@ void finalize()
   wait(gc);
   process_manager->finalize();
   inShutdown = true;
-  while (didShutdown != workerThreads().size()) {
+  Stopwatch watch;
+  watch.start();
+  while (didShutdown != workerThreads().size() && watch.elapsed() < Seconds(5)) {
     gate->open();
     usleep(1);
   }
   foreach(pthread_t thread, workerThreads()) {
     void* retval = NULL;
     if (pthread_join(thread, &retval) < 0) {
-      LOG(FATAL) << "failed joining worker thread";
+      LOG(ERROR) << "failed joining worker thread";
     }
   }
   workerThreads().clear();
