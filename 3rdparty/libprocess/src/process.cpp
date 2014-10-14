@@ -74,6 +74,7 @@
 #include <stout/net.hpp>
 #include <stout/option.hpp>
 #include <stout/os.hpp>
+#include <stout/stopwatch.hpp>
 #include <stout/strings.hpp>
 #include <stout/thread.hpp>
 #include <stout/unreachable.hpp>
@@ -364,7 +365,6 @@ public:
   Future<Response> __processes__(const Request&);
 
 private:
-
   // Delegate process name to receive root HTTP requests.
   const string delegate;
 
@@ -1701,9 +1701,13 @@ void finalize()
   inShutdown = true;
   Stopwatch watch;
   watch.start();
-  while (didShutdown != workerThreads().size() && watch.elapsed() < Seconds(5)) {
+  while (didShutdown != workerThreads().size() &&
+      watch.elapsed() < Seconds(5)) {
     gate->open();
     usleep(1);
+  }
+  if (didShutdown != workerThreads().size()) {
+    LOG(ERROR) << "failed to shut down worker threads cleanly";
   }
   foreach(pthread_t thread, workerThreads()) {
     void* retval = NULL;
