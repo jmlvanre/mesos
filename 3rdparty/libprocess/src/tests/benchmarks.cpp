@@ -145,19 +145,6 @@ private:
 };
 
 
-// A helper function that provides an entry point for a thread. This
-// is a back-port of what in c++11 would be a lambda. Launches a
-// benchmark process and waits for it to finish.
-void benchmarkLauncher(int iterations, int queueDepth, UPID other)
-{
-  BenchmarkProcess process(iterations, queueDepth, other);
-  UPID pid = spawn(&process);
-  process.start();
-  terminate(process);
-  wait(process);
-}
-
-
 // Launch numberOfProcesses processes, each with clients 'client'
 // Actors. Play ping pong back and forth between these actors and the
 // main 'server' actor. Each 'client' can have queueDepth ping
