@@ -20,9 +20,7 @@
 
 #include <gmock/gmock.h>
 
-#include <condition_variable>
-#include <mutex>
-#include <thread>
+#include <memory>
 #include <unordered_set>
 
 #include <process/gmock.hpp>
@@ -31,15 +29,11 @@
 
 using namespace process;
 
-using std::condition_variable;
 using std::function;
 using std::istringstream;
-using std::lock_guard;
-using std::mutex;
 using std::ostringstream;
 using std::string;
-using std::thread;
-using std::unique_lock;
+using std::unique_ptr;
 using std::unordered_set;
 using std::vector;
 
@@ -68,7 +62,6 @@ public:
       const Option<UPID>& _other = Option<UPID>())
     : other(_other),
       counter(0UL),
-      done(false),
       iterations(_iterations),
       maxOutstanding(_maxOutstanding),
       outstanding(0),
@@ -94,11 +87,16 @@ public:
 
   void start()
   {
+    watch.start();
     sendRemaining();
-    unique_lock<mutex> lock(_mutex);
-    while (!done) {
-      condition.wait(lock);
-    }
+  }
+
+  // Returns the number of rpcs performed per second.
+  int await()
+  {
+    latch.await();
+    double elapsed = watch.elapsed().secs();
+    return iterations / elapsed;
   }
 
 private:
@@ -117,9 +115,8 @@ private:
     ++counter;
     --outstanding;
     if (counter >= iterations) {
-      lock_guard<mutex> lock(_mutex);
-      done = true;
-      condition.notify_one();
+      latch.trigger();
+      watch.stop();
     }
     sendRemaining();
   }
@@ -135,11 +132,10 @@ private:
 
   Option<UPID> other;
 
-  int counter;
+  Latch latch;
+  Stopwatch watch;
 
-  bool done;
-  mutex _mutex;
-  condition_variable condition;
+  int counter;
 
   const int iterations;
   const int maxOutstanding;
@@ -173,9 +169,9 @@ TEST(Process, Process_BENCHMARK_Test)
   const int clients = 8;
   const int numberOfProcesses = 4;
 
-  vector<int> outPipeVector;
-  vector<int> inPipeVector;
-  vector<pid_t> pidVector;
+  vector<int> outPipes;
+  vector<int> inPipes;
+  vector<pid_t> pids;
   for (int moreToLaunch = numberOfProcesses;
        moreToLaunch >= 0; --moreToLaunch) {
     // fork in order to get numberOfProcesses seperate
@@ -210,29 +206,29 @@ TEST(Process, Process_BENCHMARK_Test)
       inStream >> other;
 
       // Launch a thread for each client that backs an actor.
-      Stopwatch watch;
-      watch.start();
-      vector<thread> threadVector;
+      vector<unique_ptr<BenchmarkProcess>> benchmarkProcesses;
       for (int i = 0; i < clients; ++i) {
-        threadVector.emplace_back(
-            benchmarkLauncher,
+        BenchmarkProcess* process = new BenchmarkProcess(
             iterations,
             queueDepth,
             other);
-      }
-
-      // Wait for the clients to finish and join on them.
-      foreach (auto& thread, threadVector) {
-        thread.join();
+        benchmarkProcesses.push_back(unique_ptr<BenchmarkProcess>(process));
+        UPID pid = spawn(process);
+        process->start();
       }
 
       // Compute the total rpcs per second for this process, write the
       // computation back to the server end of the fork.
-      double elapsed = watch.elapsed().secs();
-      int totalIterations = clients * iterations;
-      int rpcPerSecond = totalIterations / elapsed;
-      result = write(pipes[1], &rpcPerSecond, sizeof(rpcPerSecond));
-      EXPECT_EQ(result, sizeof(rpcPerSecond));
+      int totalRpcPerSecond = 0;
+      foreach (const auto& process, benchmarkProcesses) {
+        int rpcPerSecond = process->await();
+        totalRpcPerSecond += rpcPerSecond;
+        terminate(*process);
+        wait(*process);
+      }
+
+      result = write(pipes[1], &totalRpcPerSecond, sizeof(totalRpcPerSecond));
+      EXPECT_EQ(result, sizeof(totalRpcPerSecond));
       close(pipes[0]);
       exit(0);
     } else {
@@ -241,15 +237,15 @@ TEST(Process, Process_BENCHMARK_Test)
       // Keep track of the pipes to the child forks. This way the
       // results of their rpc / sec computations can be read back and
       // aggregated.
-      outPipeVector.emplace_back(pipes[1]);
-      inPipeVector.emplace_back(pipes[0]);
-      pidVector.emplace_back(pid);
+      outPipes.emplace_back(pipes[1]);
+      inPipes.emplace_back(pipes[0]);
+      pids.emplace_back(pid);
 
       // If this is the last child launched, then let the parent
       // become the 'server' actor.
       if (moreToLaunch <= 0) {
         BenchmarkProcess process(iterations, queueDepth);
-        UPID pid = spawn(&process);
+        const UPID pid = spawn(&process);
 
         // Stringify the server pid to send to the child processes.
         ostringstream outStream;
@@ -258,7 +254,7 @@ TEST(Process, Process_BENCHMARK_Test)
 
         // For each child, write the size of the stringified pid as
         // well as the stringified pid to the pipe.
-        foreach (int fd, outPipeVector) {
+        foreach (int fd, outPipes) {
           size_t result = write(fd, &stringSize, sizeof(stringSize));
           EXPECT_EQ(result, sizeof(stringSize));
           result = write(fd, outStream.str().c_str(), stringSize);
@@ -269,7 +265,7 @@ TEST(Process, Process_BENCHMARK_Test)
         // Read the resulting rpcs / second from the child processes
         // and aggregate the results.
         int totalRpcsPerSecond = 0;
-        foreach (int fd, inPipeVector) {
+        foreach (int fd, inPipes) {
           int rpcs = 0;
           size_t result = read(fd, &rpcs, sizeof(rpcs));
           EXPECT_EQ(result, sizeof(rpcs));
@@ -280,10 +276,10 @@ TEST(Process, Process_BENCHMARK_Test)
         }
 
         // Wait for all the child forks to terminately gracefully.
-        foreach (const auto& p, pidVector) {
+        foreach (const auto& p, pids) {
           ::waitpid(p, NULL, 0);
         }
-        printf("Total: [%ld] rpcs / s\n", totalRpcsPerSecond);
+        printf("Total: [%d] rpcs / s\n", totalRpcsPerSecond);
         terminate(process);
         wait(process);
       }
