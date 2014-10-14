@@ -58,23 +58,24 @@ int main(int argc, char** argv)
   return RUN_ALL_TESTS();
 }
 
+
 class BenchmarkProcess : public Process<BenchmarkProcess>
 {
 public:
   BenchmarkProcess(
-      size_t _iterations = 1,
-      size_t _maxOutstanding = 1,
+      int _iterations = 1,
+      int _maxOutstanding = 1,
       const Option<UPID>& _other = Option<UPID>())
-      : other(_other),
-        counter(0UL),
-        done(false),
-        iterations(_iterations),
-        maxOutstanding(_maxOutstanding),
-        outstanding(0),
-        sent(0)
+    : other(_other),
+      counter(0UL),
+      done(false),
+      iterations(_iterations),
+      maxOutstanding(_maxOutstanding),
+      outstanding(0),
+      sent(0)
   {
     if (other.isSome()) {
-      setlink(other.get());
+      setLink(other.get());
     }
   }
 
@@ -86,11 +87,13 @@ public:
     install("pong", &BenchmarkProcess::pong);
   }
 
-  void setlink(const UPID& that) {
+  void setLink(const UPID& that)
+  {
     link(that);
   }
 
-  void start() {
+  void start()
+  {
     sendRemaining();
     unique_lock<mutex> lock(_mutex);
     while (!done) {
@@ -102,8 +105,8 @@ private:
   void ping(const UPID& from, const string& body)
   {
     if (linkedPorts.find(from.port) == linkedPorts.end()) {
-      setlink(from);
-      linkedPorts.emplace(from.port);
+      setLink(from);
+      linkedPorts.insert(from.port);
     }
     static const string message("hi");
     send(from, "pong", message.c_str(), message.size());
@@ -132,21 +135,24 @@ private:
 
   Option<UPID> other;
 
-  size_t counter;
+  int counter;
 
   bool done;
   mutex _mutex;
   condition_variable condition;
 
-  const size_t iterations;
-  const size_t maxOutstanding;
-  size_t outstanding;
-  size_t sent;
+  const int iterations;
+  const int maxOutstanding;
+  int outstanding;
+  int sent;
   unordered_set<int> linkedPorts;
 };
 
 
-void benchmarkLauncher(size_t iterations, size_t queueDepth, UPID other)
+// A helper function that provides an entry point for a thread. This
+// is a back-port of what in c++11 would be a lambda. Launches a
+// benchmark process and waits for it to finish.
+void benchmarkLauncher(int iterations, int queueDepth, UPID other)
 {
   BenchmarkProcess process(iterations, queueDepth, other);
   UPID pid = spawn(&process);
@@ -162,15 +168,15 @@ void benchmarkLauncher(size_t iterations, size_t queueDepth, UPID other)
 // requests outstanding to the 'server' actor.
 TEST(Process, Process_BENCHMARK_Test)
 {
-  const size_t iterations = 2500;
-  const size_t queueDepth = 250;
-  const size_t clients = 8;
-  const size_t numberOfProcesses = 4;
+  const int iterations = 2500;
+  const int queueDepth = 250;
+  const int clients = 8;
+  const int numberOfProcesses = 4;
 
   vector<int> outPipeVector;
   vector<int> inPipeVector;
   vector<pid_t> pidVector;
-  for (int64_t moreToLaunch = numberOfProcesses;
+  for (int moreToLaunch = numberOfProcesses;
        moreToLaunch >= 0; --moreToLaunch) {
     // fork in order to get numberOfProcesses seperate
     // ProcessManagers. This avoids the short-circuit built into
@@ -207,7 +213,7 @@ TEST(Process, Process_BENCHMARK_Test)
       Stopwatch watch;
       watch.start();
       vector<thread> threadVector;
-      for (size_t i = 0; i < clients; ++i) {
+      for (int i = 0; i < clients; ++i) {
         threadVector.emplace_back(
             benchmarkLauncher,
             iterations,
@@ -223,8 +229,8 @@ TEST(Process, Process_BENCHMARK_Test)
       // Compute the total rpcs per second for this process, write the
       // computation back to the server end of the fork.
       double elapsed = watch.elapsed().secs();
-      size_t totalIterations = clients * iterations;
-      size_t rpcPerSecond = totalIterations / elapsed;
+      int totalIterations = clients * iterations;
+      int rpcPerSecond = totalIterations / elapsed;
       result = write(pipes[1], &rpcPerSecond, sizeof(rpcPerSecond));
       EXPECT_EQ(result, sizeof(rpcPerSecond));
       close(pipes[0]);
@@ -262,9 +268,9 @@ TEST(Process, Process_BENCHMARK_Test)
 
         // Read the resulting rpcs / second from the child processes
         // and aggregate the results.
-        size_t totalRpcsPerSecond = 0;
+        int totalRpcsPerSecond = 0;
         foreach (int fd, inPipeVector) {
-          size_t rpcs = 0;
+          int rpcs = 0;
           size_t result = read(fd, &rpcs, sizeof(rpcs));
           EXPECT_EQ(result, sizeof(rpcs));
           if (result != sizeof(rpcs)) {
