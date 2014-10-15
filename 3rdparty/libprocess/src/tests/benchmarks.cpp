@@ -160,13 +160,18 @@ TEST(Process, Process_BENCHMARK_Test)
   vector<int> inPipes;
   vector<pid_t> pids;
   for (int moreToLaunch = numberOfProcesses;
-       moreToLaunch >= 0; --moreToLaunch) {
+       moreToLaunch > 0; --moreToLaunch) {
     // fork in order to get numberOfProcesses seperate
     // ProcessManagers. This avoids the short-circuit built into
     // ProcessManager for processes communicating in the same manager.
     int pipes[2];
+    int resultPipes[2];
     pid_t pid = -1;
-    if(pipe(pipes) < 0) {
+    if(pipe2(pipes, O_CLOEXEC) < 0) {
+      perror("pipe failed");
+      abort();
+    }
+    if(pipe2(resultPipes, O_CLOEXEC) < 0) {
       perror("pipe failed");
       abort();
     }
@@ -180,10 +185,10 @@ TEST(Process, Process_BENCHMARK_Test)
 
       // Read the number of bytes about to be parsed.
       int32_t stringSize = 0;
-      size_t result = read(pipes[0], &stringSize, sizeof(stringSize));
+      ssize_t result = read(pipes[0], &stringSize, sizeof(stringSize));
       EXPECT_EQ(result, sizeof(stringSize));
-      char buffer[stringSize];
-      memset(&buffer, 0, stringSize);
+      char buffer[stringSize + 1];
+      memset(&buffer, 0, stringSize + 1);
 
       // Read in the upid of the 'server' actor.
       result = read(pipes[0], &buffer, stringSize);
@@ -200,7 +205,7 @@ TEST(Process, Process_BENCHMARK_Test)
             queueDepth,
             other);
         benchmarkProcesses.push_back(unique_ptr<BenchmarkProcess>(process));
-        UPID pid = spawn(process);
+        spawn(process);
         process->start();
       }
 
@@ -214,7 +219,10 @@ TEST(Process, Process_BENCHMARK_Test)
         wait(*process);
       }
 
-      result = write(pipes[1], &totalRpcPerSecond, sizeof(totalRpcPerSecond));
+      result = write(
+          resultPipes[1],
+          &totalRpcPerSecond,
+          sizeof(totalRpcPerSecond));
       EXPECT_EQ(result, sizeof(totalRpcPerSecond));
       close(pipes[0]);
       exit(0);
@@ -224,13 +232,13 @@ TEST(Process, Process_BENCHMARK_Test)
       // Keep track of the pipes to the child forks. This way the
       // results of their rpc / sec computations can be read back and
       // aggregated.
-      outPipes.emplace_back(pipes[1]);
-      inPipes.emplace_back(pipes[0]);
-      pids.emplace_back(pid);
+      outPipes.push_back(pipes[1]);
+      inPipes.push_back(resultPipes[0]);
+      pids.push_back(pid);
 
       // If this is the last child launched, then let the parent
       // become the 'server' actor.
-      if (moreToLaunch <= 0) {
+      if (moreToLaunch == 1) {
         BenchmarkProcess process(iterations, queueDepth);
         const UPID pid = spawn(&process);
 
@@ -242,7 +250,7 @@ TEST(Process, Process_BENCHMARK_Test)
         // For each child, write the size of the stringified pid as
         // well as the stringified pid to the pipe.
         foreach (int fd, outPipes) {
-          size_t result = write(fd, &stringSize, sizeof(stringSize));
+          ssize_t result = write(fd, &stringSize, sizeof(stringSize));
           EXPECT_EQ(result, sizeof(stringSize));
           result = write(fd, outStream.str().c_str(), stringSize);
           EXPECT_EQ(result, stringSize);
@@ -254,7 +262,7 @@ TEST(Process, Process_BENCHMARK_Test)
         int totalRpcsPerSecond = 0;
         foreach (int fd, inPipes) {
           int rpcs = 0;
-          size_t result = read(fd, &rpcs, sizeof(rpcs));
+          ssize_t result = read(fd, &rpcs, sizeof(rpcs));
           EXPECT_EQ(result, sizeof(rpcs));
           if (result != sizeof(rpcs)) {
             abort();
