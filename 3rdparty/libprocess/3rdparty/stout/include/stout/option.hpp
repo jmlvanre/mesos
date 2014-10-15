@@ -78,7 +78,7 @@ public:
   bool operator == (const Option<T>& that) const
   {
     return (isNone() && that.isNone()) ||
-      (isSome() && that.isSome() && *t == *that.t);
+           (isSome() && that.isSome() && *t == *that.t);
   }
 
   bool operator != (const Option<T>& that) const
@@ -99,13 +99,13 @@ public:
   bool isSome() const { return t != NULL; }
   bool isNone() const { return t == NULL; }
 
-  const T& get() const { assert(t); return *t; }
+  const T& get() const { assert(isSome()); return *t; }
 
   // This must return a copy to avoid returning a reference to a temporary.
-  T get(const T& _t) const { return !t ? _t : *t; }
+  T get(const T& _t) const { return isNone() ? _t : *t; }
 
   void reset() {
-    if (t) {
+    if (t != NULL) {
       t->~T();
       t = NULL;
     }
@@ -113,7 +113,7 @@ public:
 
 private:
   T* t;
-  #if __cplusplus >= 201103L
+#if __cplusplus >= 201103L
   alignas(T) char storage[sizeof(T)];
 #else
   char storage[sizeof(T)];
