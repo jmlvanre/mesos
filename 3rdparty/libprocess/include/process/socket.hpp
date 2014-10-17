@@ -3,6 +3,8 @@
 
 #include <assert.h>
 
+#include <memory>
+
 #include <stout/abort.hpp>
 #include <stout/nothing.hpp>
 #include <stout/os.hpp>
@@ -40,55 +42,28 @@ inline Try<int> socket(int family, int type, int protocol) {
 class Socket
 {
 public:
-  Socket()
-    : refs(new int(1)), s(-1) {}
+  Socket() {}
 
   explicit Socket(int _s)
-    : refs(new int(1)), s(_s) {}
-
-  ~Socket()
-  {
-    cleanup();
-  }
-
-  Socket(const Socket& that)
-  {
-    copy(that);
-  }
-
-  Socket& operator = (const Socket& that)
-  {
-    if (this != &that) {
-      cleanup();
-      copy(that);
-    }
-    return *this;
-  }
+    : impl(std::make_shared<Impl>(_s)) {}
 
   bool operator == (const Socket& that) const
   {
-    return s == that.s && refs == that.refs;
+    return impl == that.impl;
   }
 
   operator int () const
   {
-    return s;
+    return impl ? static_cast<int>(*impl) : -1;
   }
 
 private:
-  void copy(const Socket& that)
-  {
-    assert(that.refs > 0);
-    __sync_fetch_and_add(that.refs, 1);
-    refs = that.refs;
-    s = that.s;
-  }
+  class Impl {
+  public:
+    Impl(int _s) : s(_s) {}
 
-  void cleanup()
-  {
-    assert(refs != NULL);
-    if (__sync_sub_and_fetch(refs, 1) == 0) {
-      delete refs;
+    ~Impl()
+    {
       if (s >= 0) {
         Try<Nothing> close = os::close(s);
         if (close.isError()) {
@@ -96,10 +71,17 @@ private:
         }
       }
     }
-  }
 
-  int* refs;
-  int s;
+    operator int () const
+    {
+      return s;
+    }
+
+  private:
+    int s;
+  };
+
+  std::shared_ptr<Impl> impl;
 };
 
 } // namespace process {
