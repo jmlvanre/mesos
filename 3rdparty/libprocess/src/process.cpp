@@ -1215,31 +1215,6 @@ void sending_connect(struct ev_loop* loop, ev_io* watcher, int revents)
 }
 
 
-void receiving_connect(struct ev_loop* loop, ev_io* watcher, int revents)
-{
-  int s = watcher->fd;
-
-  // Now check that a successful connection was made.
-  int opt;
-  socklen_t optlen = sizeof(opt);
-
-  if (getsockopt(s, SOL_SOCKET, SO_ERROR, &opt, &optlen) < 0 || opt != 0) {
-    // Connect failure.
-    VLOG(1) << "Socket error while connecting";
-    socket_manager->close(s);
-    Socket* socket = (Socket*) watcher->data;
-    delete socket;
-    ev_io_stop(loop, watcher);
-    delete watcher;
-  } else {
-    // We're connected! Now let's do some receiving.
-    ev_io_stop(loop, watcher);
-    ev_io_init(watcher, ignore_data, s, EV_READ);
-    ev_io_start(loop, watcher);
-  }
-}
-
-
 void accept(struct ev_loop* loop, ev_io* watcher, int revents)
 {
   CHECK_EQ(__s__, watcher->fd);
