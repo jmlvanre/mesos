@@ -1975,61 +1975,27 @@ void SocketManager::link(ProcessBase* process, const UPID& to)
     if ((node.ip != __ip__ || node.port != __port__)
         && persists.count(node) == 0) {
       // Okay, no link, let's create a socket.
-      Try<int> socket = process::socket(AF_INET, SOCK_STREAM, 0);
-      if (socket.isError()) {
-        LOG(FATAL) << "Failed to link, socket: " << socket.error();
-      }
+      Socket socket;
 
-      int s = socket.get();
-
-      Try<Nothing> nonblock = os::nonblock(s);
-      if (nonblock.isError()) {
-        LOG(FATAL) << "Failed to link, nonblock: " << nonblock.error();
-      }
-
-      Try<Nothing> cloexec = os::cloexec(s);
-      if (cloexec.isError()) {
-        LOG(FATAL) << "Failed to link, cloexec: " << cloexec.error();
-      }
-
-      sockets[s] = Socket(s);
-      nodes[s] = node;
-
-      persists[node] = s;
-
-      // Allocate and initialize a watcher for reading data from this
-      // socket. Note that we don't expect to receive anything other
-      // than HTTP '202 Accepted' responses which we anyway ignore.
-      // We do, however, want to react when it gets closed so we can
-      // generate appropriate lost events (since this is a 'link').
-      ev_io* watcher = new ev_io();
-      watcher->data = new Socket(sockets[s]);
-
-      // Try and connect to the node using this socket.
-      sockaddr_in addr;
-      memset(&addr, 0, sizeof(addr));
-      addr.sin_family = PF_INET;
-      addr.sin_port = htons(to.port);
-      addr.sin_addr.s_addr = to.ip;
-
-      if (connect(s, (sockaddr*) &addr, sizeof(addr)) < 0) {
-        if (errno != EINPROGRESS) {
-          PLOG(FATAL) << "Failed to link, connect";
+      socket.connect(node).then([](const Socket& socket) {
+        ev_io* watcher = new ev_io();
+        watcher->data = new Socket(socket);
+        ev_io_init(watcher, ignore_data, socket, EV_READ);
+        // Enqueue the watcher.
+        synchronized (watchers) {
+          watchers->push(watcher);
         }
 
-        // Wait for socket to be connected.
-        ev_io_init(watcher, receiving_connect, s, EV_WRITE);
-      } else {
-        ev_io_init(watcher, ignore_data, s, EV_READ);
-      }
+        // Interrupt the loop.
+        ev_async_send(loop, &async_watcher);
+        return socket;
+      }).onFailed([socket, this](const std::string& error) {
+        close(socket);
+      });
 
-      // Enqueue the watcher.
-      synchronized (watchers) {
-        watchers->push(watcher);
-      }
-
-      // Interrupt the loop.
-      ev_async_send(loop, &async_watcher);
+      sockets[socket] = socket;
+      nodes[socket] = node;
+      persists[node] = socket;
     }
 
     links[to].insert(process);
@@ -3602,6 +3568,84 @@ void post(const UPID& from,
 
   // Encode and transport outgoing message.
   transport(encode(from, to, name, string(data, length)));
+}
+
+
+namespace internal {
+
+
+struct AsyncConnect {
+  AsyncConnect(Socket&& _socket) : socket(std::move(_socket)) {}
+  Promise<Socket> promise;
+  Socket socket;
+};
+
+
+void async_receiving_connect(struct ev_loop* loop, ev_io* watcher, int revents)
+{
+  int s = watcher->fd;
+  AsyncConnect* asyncConnect = reinterpret_cast<AsyncConnect*>(watcher->data);
+
+  // Now check that a successful connection was made.
+  int opt;
+  socklen_t optlen = sizeof(opt);
+
+  if (getsockopt(s, SOL_SOCKET, SO_ERROR, &opt, &optlen) < 0 || opt != 0) {
+    // Connect failure.
+    VLOG(1) << "Socket error while connecting";
+    asyncConnect->promise.fail("Socket error while connecting");
+  } else {
+    asyncConnect->promise.set(asyncConnect->socket);
+  }
+  ev_io_stop(loop, watcher);
+  delete watcher;
+  delete asyncConnect;
+}
+
+
+} // namespace internal {
+
+
+Future<Socket> Socket::Impl::connect(const Node& node)
+{
+  CHECK(_connectionState == notConnected) << "Socket already connected";
+
+  sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = PF_INET;
+  addr.sin_port = htons(node.port);
+  addr.sin_addr.s_addr = node.ip;
+
+  if (::connect(s, (sockaddr*) &addr, sizeof(addr)) < 0) {
+    if (errno != EINPROGRESS) {
+      return Failure(ErrnoError("Failed to connect socket"));
+    }
+    internal::AsyncConnect* asyncConnect =
+        new internal::AsyncConnect(Socket(shared_from_this()));
+    ev_io* watcher = new ev_io();
+    watcher->data = asyncConnect;
+
+    // Wait for socket to be connected.
+    ev_io_init(watcher, internal::async_receiving_connect, s, EV_WRITE);
+
+    // Enqueue the watcher.
+    synchronized (watchers) {
+      watchers->push(watcher);
+    }
+
+    // Interrupt the loop.
+    ev_async_send(loop, &async_watcher);
+
+    return asyncConnect->promise.future().then([this](const Socket& socket) {
+      _connectionState = connected;
+      return socket;
+    }).onFailed([this](const std::string& err) {
+      _connectionState = connectionFailed;
+    });
+  } else {
+    _connectionState = connected;
+    return Socket(shared_from_this());
+  }
 }
 
 

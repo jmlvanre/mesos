@@ -5,6 +5,9 @@
 
 #include <memory>
 
+#include <process/future.hpp>
+#include <process/node.hpp>
+
 #include <stout/abort.hpp>
 #include <stout/nothing.hpp>
 #include <stout/os.hpp>
@@ -42,7 +45,14 @@ inline Try<int> socket(int family, int type, int protocol) {
 class Socket
 {
 public:
-  Socket() {}
+  enum connectionState {
+    notConnected,
+    connected,
+    connectionClosed,
+    connectionFailed
+  };
+
+  Socket() : impl(std::make_shared<Impl>(-1)) {}
 
   explicit Socket(int _s)
     : impl(std::make_shared<Impl>(_s)) {}
@@ -54,13 +64,28 @@ public:
 
   operator int () const
   {
-    return impl ? static_cast<int>(*impl) : -1;
+    return *impl;
+  }
+
+  Future<Socket> connect(const Node& node)
+  {
+    if (*impl < 0) {
+      Try<int> fd = process::socket(
+          AF_INET,
+          SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
+          0);
+      if (fd.isError()) {
+        return Failure(fd.error());
+      }
+      impl->s = fd.get();
+    }
+    return impl->connect(node);
   }
 
 private:
-  class Impl {
+  class Impl : public std::enable_shared_from_this<Impl> {
   public:
-    Impl(int _s) : s(_s) {}
+    Impl(int _s) : _connectionState(notConnected), s(_s) {}
 
     ~Impl()
     {
@@ -77,9 +102,16 @@ private:
       return s;
     }
 
+    Future<Socket> connect(const Node& node);
+
   private:
+    // TODO(jmlvanre): lock for data state
+    connectionState _connectionState;
     int s;
+    friend class Socket;
   };
+
+  Socket(std::shared_ptr<Impl>&& _impl) : impl(std::move(_impl)) {}
 
   std::shared_ptr<Impl> impl;
 };
