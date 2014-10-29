@@ -41,7 +41,8 @@ inline Try<int> socket(int family, int type, int protocol) {
 class Socket
 {
 public:
-  class Impl {
+  class Impl
+  {
   public:
     Impl(int _s) : s(_s) {}
 
