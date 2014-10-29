@@ -5,6 +5,7 @@
 
 #include <stout/abort.hpp>
 #include <stout/nothing.hpp>
+#include <stout/memory.hpp>
 #include <stout/os.hpp>
 #include <stout/try.hpp>
 
@@ -40,55 +41,12 @@ inline Try<int> socket(int family, int type, int protocol) {
 class Socket
 {
 public:
-  Socket()
-    : refs(new int(1)), s(-1) {}
+  class Impl {
+  public:
+    Impl(int _s) : s(_s) {}
 
-  explicit Socket(int _s)
-    : refs(new int(1)), s(_s) {}
-
-  ~Socket()
-  {
-    cleanup();
-  }
-
-  Socket(const Socket& that)
-  {
-    copy(that);
-  }
-
-  Socket& operator = (const Socket& that)
-  {
-    if (this != &that) {
-      cleanup();
-      copy(that);
-    }
-    return *this;
-  }
-
-  bool operator == (const Socket& that) const
-  {
-    return s == that.s && refs == that.refs;
-  }
-
-  operator int () const
-  {
-    return s;
-  }
-
-private:
-  void copy(const Socket& that)
-  {
-    assert(that.refs > 0);
-    __sync_fetch_and_add(that.refs, 1);
-    refs = that.refs;
-    s = that.s;
-  }
-
-  void cleanup()
-  {
-    assert(refs != NULL);
-    if (__sync_sub_and_fetch(refs, 1) == 0) {
-      delete refs;
+    ~Impl()
+    {
       if (s >= 0) {
         Try<Nothing> close = os::close(s);
         if (close.isError()) {
@@ -96,10 +54,49 @@ private:
         }
       }
     }
+
+    operator int () const
+    {
+      return s;
+    }
+
+  private:
+    int s;
+  };
+
+  Socket() {}
+
+  explicit Socket(int _s) : impl(std::make_shared<Impl>(_s)) {}
+
+  bool operator == (const Socket& that) const
+  {
+    return impl == that.impl;
   }
 
-  int* refs;
-  int s;
+  operator int () const
+  {
+    return *get();
+  }
+
+private:
+  const std::shared_ptr<Impl>& get() const
+  {
+    return impl ? impl : (impl = create());
+  }
+
+  static std::shared_ptr<Impl> create()
+  {
+    Try<int> fd = process::socket(
+        AF_INET,
+        SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
+        0);
+    if (fd.isError()) {
+      ABORT("Failed to create socket: " + fd.error());
+    }
+    return std::make_shared<Impl>(fd.get());
+  }
+
+  mutable std::shared_ptr<Impl> impl;
 };
 
 } // namespace process {
