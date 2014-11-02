@@ -5,6 +5,7 @@
 
 #include <map>
 #include <sstream>
+#include <boost/concept_check.hpp>
 
 #include <process/http.hpp>
 #include <process/process.hpp>
@@ -25,41 +26,50 @@ namespace process {
 
 const uint32_t GZIP_MINIMUM_BODY_LENGTH = 1024;
 
+#if 0
 typedef void (*Sender)(struct ev_loop*, ev_io*, int);
 
 extern void send_data(struct ev_loop*, ev_io*, int);
 extern void send_file(struct ev_loop*, ev_io*, int);
+#endif
 
 
 class Encoder
 {
 public:
+  enum kind {
+    data_encoder,
+    file_encoder
+  };
+  Encoder() {};
   explicit Encoder(const Socket& _s) : s(_s) {}
   virtual ~Encoder() {}
 
-  virtual Sender sender() = 0;
+  virtual kind getKind() const = 0;
 
   Socket socket() const
   {
     return s;
   }
 
+  void setSocket(const Socket& _s) { s = _s; }
+
 private:
-  const Socket s; // The socket this encoder is associated with.
+  Socket s; // The socket this encoder is associated with.
 };
 
 
 class DataEncoder : public Encoder
 {
 public:
+  DataEncoder(const std::string& _data) : data(_data), index(0) {}
   DataEncoder(const Socket& s, const std::string& _data)
     : Encoder(s), data(_data), index(0) {}
 
   virtual ~DataEncoder() {}
 
-  virtual Sender sender()
-  {
-    return send_data;
+  virtual kind getKind() const {
+    return data_encoder;
   }
 
   virtual const char* next(size_t* length)
@@ -93,6 +103,8 @@ class MessageEncoder : public DataEncoder
 public:
   MessageEncoder(const Socket& s, Message* _message)
     : DataEncoder(s, encode(_message)), message(_message) {}
+
+MessageEncoder(Message* _message) : DataEncoder(encode(_message)), message(_message) {}
 
   virtual ~MessageEncoder()
   {
@@ -235,9 +247,8 @@ public:
     os::close(fd);
   }
 
-  virtual Sender sender()
-  {
-    return send_file;
+  virtual kind getKind() const {
+    return file_encoder;
   }
 
   virtual int next(off_t* offset, size_t* length)
@@ -259,6 +270,14 @@ public:
   virtual size_t remaining() const
   {
     return size - index;
+  }
+
+  int getFd() const {
+    return fd;
+  }
+
+  size_t getSize() const {
+    return size;
   }
 
 private:

@@ -101,7 +101,9 @@ using process::http::ServiceUnavailable;
 using std::deque;
 using std::find;
 using std::list;
+using std::lock_guard;
 using std::map;
+using std::mutex;
 using std::ostream;
 using std::pair;
 using std::queue;
@@ -279,8 +281,6 @@ public:
             const Socket& socket);
   void send(Message* message);
 
-  Encoder* next(int s);
-
   void close(int s);
 
   void exited(const Node& node);
@@ -311,9 +311,6 @@ private:
   // a persistant socket has been lost (and thus generate
   // ExitedEvents).
   map<Node, int> persists;
-
-  // Map from socket to outgoing queue.
-  map<int, queue<Encoder*> > outgoing;
 
   // HTTP proxies.
   map<int, HttpProxy*> proxies;
@@ -1057,189 +1054,6 @@ void ignore_data(struct ev_loop* loop, ev_io* watcher, int revents)
 }
 
 
-void send_data(struct ev_loop* loop, ev_io* watcher, int revents)
-{
-  DataEncoder* encoder = (DataEncoder*) watcher->data;
-
-  int s = watcher->fd;
-
-  while (true) {
-    const void* data;
-    size_t size;
-
-    data = encoder->next(&size);
-    CHECK(size > 0);
-
-    ssize_t length = send(s, data, size, MSG_NOSIGNAL);
-
-    if (length < 0 && (errno == EINTR)) {
-      // Interrupted, try again now.
-      encoder->backup(size);
-      continue;
-    } else if (length < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      // Might block, try again later.
-      encoder->backup(size);
-      break;
-    } else if (length <= 0) {
-      // Socket error or closed.
-      if (length < 0) {
-        const char* error = strerror(errno);
-        VLOG(1) << "Socket error while sending: " << error;
-      } else {
-        VLOG(1) << "Socket closed while sending";
-      }
-      socket_manager->close(s);
-      delete encoder;
-      ev_io_stop(loop, watcher);
-      delete watcher;
-      break;
-    } else {
-      CHECK(length > 0);
-
-      // Update the encoder with the amount sent.
-      encoder->backup(size - length);
-
-      // See if there is any more of the message to send.
-      if (encoder->remaining() == 0) {
-        delete encoder;
-
-        // Stop this watcher for now.
-        ev_io_stop(loop, watcher);
-
-        // Check for more stuff to send on socket.
-        Encoder* next = socket_manager->next(s);
-        if (next != NULL) {
-          watcher->data = next;
-          ev_io_init(watcher, next->sender(), s, EV_WRITE);
-          ev_io_start(loop, watcher);
-        } else {
-          // Nothing more to send right now, clean up.
-          delete watcher;
-        }
-        break;
-      }
-    }
-  }
-}
-
-
-void send_file(struct ev_loop* loop, ev_io* watcher, int revents)
-{
-  FileEncoder* encoder = (FileEncoder*) watcher->data;
-
-  int s = watcher->fd;
-
-  while (true) {
-    int fd;
-    off_t offset;
-    size_t size;
-
-    fd = encoder->next(&offset, &size);
-    CHECK(size > 0);
-
-    ssize_t length = os::sendfile(s, fd, offset, size);
-
-    if (length < 0 && (errno == EINTR)) {
-      // Interrupted, try again now.
-      encoder->backup(size);
-      continue;
-    } else if (length < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      // Might block, try again later.
-      encoder->backup(size);
-      break;
-    } else if (length <= 0) {
-      // Socket error or closed.
-      if (length < 0) {
-        const char* error = strerror(errno);
-        VLOG(1) << "Socket error while sending: " << error;
-      } else {
-        VLOG(1) << "Socket closed while sending";
-      }
-      socket_manager->close(s);
-      delete encoder;
-      ev_io_stop(loop, watcher);
-      delete watcher;
-      break;
-    } else {
-      CHECK(length > 0);
-
-      // Update the encoder with the amount sent.
-      encoder->backup(size - length);
-
-      // See if there is any more of the message to send.
-      if (encoder->remaining() == 0) {
-        delete encoder;
-
-        // Stop this watcher for now.
-        ev_io_stop(loop, watcher);
-
-        // Check for more stuff to send on socket.
-        Encoder* next = socket_manager->next(s);
-        if (next != NULL) {
-          watcher->data = next;
-          ev_io_init(watcher, next->sender(), s, EV_WRITE);
-          ev_io_start(loop, watcher);
-        } else {
-          // Nothing more to send right now, clean up.
-          delete watcher;
-        }
-        break;
-      }
-    }
-  }
-}
-
-
-void sending_connect(struct ev_loop* loop, ev_io* watcher, int revents)
-{
-  int s = watcher->fd;
-
-  // Now check that a successful connection was made.
-  int opt;
-  socklen_t optlen = sizeof(opt);
-
-  if (getsockopt(s, SOL_SOCKET, SO_ERROR, &opt, &optlen) < 0 || opt != 0) {
-    // Connect failure.
-    VLOG(1) << "Socket error while connecting";
-    socket_manager->close(s);
-    MessageEncoder* encoder = (MessageEncoder*) watcher->data;
-    delete encoder;
-    ev_io_stop(loop, watcher);
-    delete watcher;
-  } else {
-    // We're connected! Now let's do some sending.
-    ev_io_stop(loop, watcher);
-    ev_io_init(watcher, send_data, s, EV_WRITE);
-    ev_io_start(loop, watcher);
-  }
-}
-
-
-void receiving_connect(struct ev_loop* loop, ev_io* watcher, int revents)
-{
-  int s = watcher->fd;
-
-  // Now check that a successful connection was made.
-  int opt;
-  socklen_t optlen = sizeof(opt);
-
-  if (getsockopt(s, SOL_SOCKET, SO_ERROR, &opt, &optlen) < 0 || opt != 0) {
-    // Connect failure.
-    VLOG(1) << "Socket error while connecting";
-    socket_manager->close(s);
-    Socket* socket = (Socket*) watcher->data;
-    delete socket;
-    ev_io_stop(loop, watcher);
-    delete watcher;
-  } else {
-    // We're connected! Now let's do some receiving.
-    ev_io_stop(loop, watcher);
-    ev_io_init(watcher, ignore_data, s, EV_READ);
-    ev_io_start(loop, watcher);
-  }
-}
-
-
 void accept(struct ev_loop* loop, ev_io* watcher, int revents)
 {
   CHECK_EQ(__s__, watcher->fd);
@@ -1277,16 +1091,27 @@ void accept(struct ev_loop* loop, ev_io* watcher, int revents)
     os::close(s);
   } else {
     // Inform the socket manager for proper bookkeeping.
-    const Socket& socket = socket_manager->accepted(s);
+    const Socket socket = socket_manager->accepted(s);
 
     // Allocate and initialize the decoder and watcher.
     DataDecoder* decoder = new DataDecoder(socket);
 
-    ev_io* watcher = new ev_io();
-    watcher->data = decoder;
+    socket.onRead([decoder](const char* data, size_t length) {
+      // Decode as much of the data as possible into HTTP requests.
+      const deque<Request*>& requests = decoder->decode(data, length);
 
-    ev_io_init(watcher, recv_data, s, EV_READ);
-    ev_io_start(loop, watcher);
+      if (!requests.empty()) {
+        foreach (Request* request, requests) {
+          process_manager->handle(decoder->socket(), request);
+        }
+      } else if (requests.empty() && decoder->failed()) {
+        VLOG(1) << "Decoder error while receiving";
+        decoder->socket().close();
+      }
+    }).onClose([decoder](const Socket& socket) {
+      socket_manager->close(socket);
+      delete decoder;
+    });
   }
 }
 
@@ -1949,11 +1774,209 @@ SocketManager::~SocketManager() {}
 Socket SocketManager::accepted(int s)
 {
   synchronized (this) {
-    return sockets[s] = Socket(s);
+    return sockets[s] = Socket(s, Socket::libev, Socket::connected);
   }
 
   UNREACHABLE();
 }
+
+
+namespace internal {
+
+void socket_read(struct ev_loop* loop, ev_io* watcher, int revents)
+{
+  int s = watcher->fd;
+
+  while (true) {
+    const ssize_t size = 80 * 1024;
+    ssize_t length = 0;
+
+    char data[size];
+
+    length = recv(s, data, size, 0);
+
+    Socket::Impl* impl = reinterpret_cast<Socket::Impl*>(watcher->data);
+
+    if (length < 0 && (errno == EINTR)) {
+      // Interrupted, try again now.
+      continue;
+    } else if (length < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      // Might block, try again later.
+      break;
+    } else if (length <= 0) {
+      // Socket error or closed.
+      if (length < 0) {
+        const char* error = strerror(errno);
+        VLOG(1) << "Socket error while receiving: " << error;
+      } else {
+        VLOG(2) << "Socket closed while receiving";
+      }
+      impl->closeSocket();
+      break;
+    } else {
+      impl->readReady(data, length);
+    }
+  }
+}
+
+void socket_send(struct ev_loop* loop, ev_io* watcher, int revents)
+{
+  int s = watcher->fd;
+
+  Socket::Impl* impl = reinterpret_cast<Socket::Impl*>(watcher->data);
+  impl->trySend();
+}
+
+} // namespace internal {
+
+
+class LibevSocketImpl : public Socket::Impl
+{
+public:
+  LibevSocketImpl(int _s, Socket::connectionState connState = Socket::notConnected)
+    : Socket::Impl(_s, connState) , hasReadCb(false), hasCloseCb(false), closeOnDrain(false), notQueued(true) {
+      sendWatcher.data = this;
+      ev_io_init(&sendWatcher, internal::socket_send, s, EV_WRITE);
+      readWatcher.data = this;
+      ev_io_init(&readWatcher, internal::socket_read, s, EV_READ);
+    }
+
+  virtual ~LibevSocketImpl()
+  {
+    if (s >= 0) {
+      Try<Nothing> close = os::close(s);
+      if (close.isError()) {
+        ABORT("Failed to close socket: " + close.error());
+      }
+    }
+  }
+
+  virtual Future<Socket> connect(const Node& node) override;
+
+  virtual Future<Socket> onConnected() override;
+
+  virtual void onRead(const std::function<void (const char*, size_t)>& cb) override;
+  virtual void readReady(const char* data, size_t length) override;
+
+  virtual void setConnectionState(const Socket::connectionState connState) override
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    _connectionState = connState;
+    if (_connectionState == Socket::connected && connectionFuture.isSome()) {
+      connectionFuture = None();
+    }
+  }
+
+  virtual void onClose(const std::function<void (const Socket& socket)>& cb) override;
+  virtual void closeSocket() override;
+  virtual void drainAndClose() override;
+
+  virtual Future<Nothing> send(const char* data, size_t length) override;
+  virtual Future<Nothing> sendFile(int fd, size_t length) override;
+  virtual void trySend() override;
+
+
+private:
+  struct SendRequest {
+    virtual Encoder::kind getKind() const = 0;
+    virtual void advance(size_t length) = 0;
+    virtual bool finished() const = 0;
+    virtual ~SendRequest() {}
+    Promise<Nothing> promise;
+    protected:
+    SendRequest() {}
+  };
+  struct SendDataRequest : public SendRequest {
+    SendDataRequest(const char* _data, size_t _length) : data(_data), length(_length) {}
+    virtual ~SendDataRequest() {}
+    const char* data;
+    size_t length;
+    virtual Encoder::kind getKind() const { return Encoder::data_encoder; }
+    virtual void advance(size_t size)
+    {
+      data += size;
+      length -= size;
+    }
+    virtual bool finished() const { return length == 0; }
+  };
+  struct SendFileRequest : public SendRequest {
+    SendFileRequest(int _fd, size_t _length) : fd(_fd), offset(0), length(_length) {}
+    virtual ~SendFileRequest() {}
+    int fd;
+    off_t offset;
+    size_t length;
+    virtual Encoder::kind getKind() const { return Encoder::file_encoder; }
+    virtual void advance(size_t size)
+    {
+      offset += size;
+      length -= size;
+    }
+    virtual bool finished() const { return length == 0; }
+  };
+
+  Future<Nothing> enqueueSendRequest(SendRequest* request);
+
+  std::mutex _mutex;
+  Option<Future<Socket>> connectionFuture;
+
+  bool hasReadCb;
+  std::function<void (const char*, size_t)> onReadCb;
+
+  bool hasCloseCb;
+  std::function<void (const Socket& socket)> onCloseCb;
+
+  ev_io readWatcher;
+
+  ev_io sendWatcher;
+  std::queue<SendRequest *> sendRequests;
+  std::mutex sendMutex;
+
+  bool closeOnDrain;
+  bool notQueued;
+  std::shared_ptr<Socket::Impl> self;
+};
+
+
+Socket::Socket(int _s, socketKind _kind, connectionState _connectionState)
+  : kind(_kind), impl(std::make_shared<LibevSocketImpl>(_s, _connectionState)) {}
+
+
+std::shared_ptr<Socket::Impl> Socket::create(socketKind kind)
+{
+  CHECK(kind != uninitialized) << "Can not call create() on uninitialized socket";
+  Try<int> fd = process::socket(
+      AF_INET,
+      SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
+      0);
+  if (fd.isError()) {
+    ABORT("Failed to create socket: " + fd.error());
+  }
+  return std::make_shared<LibevSocketImpl>(fd.get());
+}
+
+
+namespace internal {
+
+
+Future<Socket> link_connect_success(const Socket& socket)
+{
+  socket.onRead([](const char* data, size_t length) {
+  }).onClose([](const Socket& socket) {
+    socket_manager->close(socket);
+  });
+  return socket;
+}
+
+void link_connect_fail(
+    const string&,
+    const Socket& socket,
+    SocketManager* socketManager)
+{
+  socketManager->close(socket);
+}
+
+
+} // namespace internal {
 
 
 void SocketManager::link(ProcessBase* process, const UPID& to)
@@ -1975,61 +1998,19 @@ void SocketManager::link(ProcessBase* process, const UPID& to)
     if ((node.ip != __ip__ || node.port != __port__)
         && persists.count(node) == 0) {
       // Okay, no link, let's create a socket.
-      Try<int> socket = process::socket(AF_INET, SOCK_STREAM, 0);
-      if (socket.isError()) {
-        LOG(FATAL) << "Failed to link, socket: " << socket.error();
-      }
+      Socket socket(Socket::libev);
 
-      int s = socket.get();
+      sockets[socket] = socket;
+      nodes[socket] = node;
+      persists[node] = socket;
 
-      Try<Nothing> nonblock = os::nonblock(s);
-      if (nonblock.isError()) {
-        LOG(FATAL) << "Failed to link, nonblock: " << nonblock.error();
-      }
-
-      Try<Nothing> cloexec = os::cloexec(s);
-      if (cloexec.isError()) {
-        LOG(FATAL) << "Failed to link, cloexec: " << cloexec.error();
-      }
-
-      sockets[s] = Socket(s);
-      nodes[s] = node;
-
-      persists[node] = s;
-
-      // Allocate and initialize a watcher for reading data from this
-      // socket. Note that we don't expect to receive anything other
-      // than HTTP '202 Accepted' responses which we anyway ignore.
-      // We do, however, want to react when it gets closed so we can
-      // generate appropriate lost events (since this is a 'link').
-      ev_io* watcher = new ev_io();
-      watcher->data = new Socket(sockets[s]);
-
-      // Try and connect to the node using this socket.
-      sockaddr_in addr;
-      memset(&addr, 0, sizeof(addr));
-      addr.sin_family = PF_INET;
-      addr.sin_port = htons(to.port);
-      addr.sin_addr.s_addr = to.ip;
-
-      if (connect(s, (sockaddr*) &addr, sizeof(addr)) < 0) {
-        if (errno != EINPROGRESS) {
-          PLOG(FATAL) << "Failed to link, connect";
-        }
-
-        // Wait for socket to be connected.
-        ev_io_init(watcher, receiving_connect, s, EV_WRITE);
-      } else {
-        ev_io_init(watcher, ignore_data, s, EV_READ);
-      }
-
-      // Enqueue the watcher.
-      synchronized (watchers) {
-        watchers->push(watcher);
-      }
-
-      // Interrupt the loop.
-      ev_async_send(loop, &async_watcher);
+      socket.connect(node, Socket::libev)
+        .then(lambda::bind(&internal::link_connect_success, lambda::_1))
+        .onFailed(lambda::bind(
+            &internal::link_connect_fail,
+            lambda::_1,
+            socket,
+            this));
     }
 
     links[to].insert(process);
@@ -2073,31 +2054,54 @@ void SocketManager::send(Encoder* encoder, bool persist)
 {
   CHECK(encoder != NULL);
 
+  size_t size = 0;
+  const char* data = NULL;
+
+  switch (encoder->getKind()) {
+    case Encoder::data_encoder: {
+      data = reinterpret_cast<DataEncoder*>(encoder)->next(&size);
+      break;
+    }
+    case Encoder::file_encoder: {
+      break;
+    }
+  }
+
   synchronized (this) {
-    if (sockets.count(encoder->socket()) > 0) {
+    Socket socket = encoder->socket();
+    if (sockets.count(socket) > 0) {
       // Update whether or not this socket should get disposed after
       // there is no more data to send.
       if (!persist) {
-        dispose.insert(encoder->socket());
+        dispose.insert(socket);
       }
 
-      if (outgoing.count(encoder->socket()) > 0) {
-        outgoing[encoder->socket()].push(encoder);
-      } else {
-        // Initialize the outgoing queue.
-        outgoing[encoder->socket()];
-
-        // Allocate and initialize the watcher.
-        ev_io* watcher = new ev_io();
-        watcher->data = encoder;
-
-        ev_io_init(watcher, encoder->sender(), encoder->socket(), EV_WRITE);
-
-        synchronized (watchers) {
-          watchers->push(watcher);
+      switch (encoder->getKind()) {
+        case Encoder::data_encoder: {
+          socket.send(data, size).onAny([this, encoder, persist, socket]() {
+            delete encoder;
+            if (!persist) {
+              synchronized (this) {
+                socket_manager->close(socket);
+                socket.drainAndClose();
+              }
+            }
+          });
+          break;
         }
-
-        ev_async_send(loop, &async_watcher);
+        case Encoder::file_encoder: {
+          FileEncoder* fileEncoder = reinterpret_cast<FileEncoder*>(encoder);
+          socket.sendFile(fileEncoder->getFd(), fileEncoder->getSize()).onAny([this, encoder, persist, socket]() {
+            delete encoder;
+            if (!persist) {
+              synchronized (this) {
+                socket_manager->close(socket);
+                socket.drainAndClose();
+              }
+            }
+          });
+          break;
+        }
       }
     } else {
       VLOG(1) << "Attempting to send on a no longer valid socket!";
@@ -2132,6 +2136,8 @@ void SocketManager::send(Message* message)
 
   Node node(message->to.ip, message->to.port);
 
+  MessageEncoder *encoder = new MessageEncoder(message);
+
   synchronized (this) {
     // Check if there is already a socket.
     bool persist = persists.count(node) > 0;
@@ -2139,150 +2145,32 @@ void SocketManager::send(Message* message)
     if (persist || temp) {
       int s = persist ? persists[node] : temps[node];
       CHECK(sockets.count(s) > 0);
-      send(new MessageEncoder(sockets[s], message), persist);
+      encoder->setSocket(sockets[s]);
+      send(encoder, persist);
+      //send(new MessageEncoder(sockets[s], message), persist);
     } else {
       // No peristent or temporary socket to the node currently
       // exists, so we create a temporary one.
-      Try<int> socket = process::socket(AF_INET, SOCK_STREAM, 0);
-      if (socket.isError()) {
-        LOG(FATAL) << "Failed to send, socket: " << socket.error();
-      }
+      Socket socket(Socket::libev);
 
-      int s = socket.get();
+      sockets[socket] = socket;
+      nodes[socket] = node;
+      temps[node] = socket;
 
-      Try<Nothing> nonblock = os::nonblock(s);
-      if (nonblock.isError()) {
-        LOG(FATAL) << "Failed to send, nonblock: " << nonblock.error();
-      }
+      socket.connect(node, Socket::libev)
+        .then([encoder, persist, this](const Socket& socket) {
+          socket.onRead([](const char*, size_t) {/* ignore data */});
+          encoder->setSocket(socket);
+          send(encoder, persist);
+          return socket;
+        })
+        .onFailed([socket]() {
+          socket_manager->close(socket);
+        });
 
-      Try<Nothing> cloexec = os::cloexec(s);
-      if (cloexec.isError()) {
-        LOG(FATAL) << "Failed to send, cloexec: " << cloexec.error();
-      }
-
-      sockets[s] = Socket(s);
-      nodes[s] = node;
-      temps[node] = s;
-
-      dispose.insert(s);
-
-      // Initialize the outgoing queue.
-      outgoing[s];
-
-      // Allocate and initialize a watcher for reading data from this
-      // socket. Note that we don't expect to receive anything other
-      // than HTTP '202 Accepted' responses which we anyway ignore.
-      ev_io* watcher = new ev_io();
-      watcher->data = new Socket(sockets[s]);
-
-      ev_io_init(watcher, ignore_data, s, EV_READ);
-
-      // Enqueue the watcher.
-      synchronized (watchers) {
-        watchers->push(watcher);
-      }
-
-      // Allocate and initialize a watcher for sending the message.
-      watcher = new ev_io();
-      watcher->data = new MessageEncoder(sockets[s], message);
-
-      // Try and connect to the node using this socket.
-      sockaddr_in addr;
-      memset(&addr, 0, sizeof(addr));
-      addr.sin_family = PF_INET;
-      addr.sin_port = htons(message->to.port);
-      addr.sin_addr.s_addr = message->to.ip;
-
-      if (connect(s, (sockaddr*) &addr, sizeof(addr)) < 0) {
-        if (errno != EINPROGRESS) {
-          PLOG(FATAL) << "Failed to send, connect";
-        }
-
-        // Initialize watcher for connecting.
-        ev_io_init(watcher, sending_connect, s, EV_WRITE);
-      } else {
-        // Initialize watcher for sending.
-        ev_io_init(watcher, send_data, s, EV_WRITE);
-      }
-
-      // Enqueue the watcher.
-      synchronized (watchers) {
-        watchers->push(watcher);
-      }
-
-      ev_async_send(loop, &async_watcher);
+      dispose.insert(socket);
     }
   }
-}
-
-
-Encoder* SocketManager::next(int s)
-{
-  HttpProxy* proxy = NULL; // Non-null if needs to be terminated.
-
-  synchronized (this) {
-    // We cannot assume 'sockets.count(s) > 0' here because it's
-    // possible that 's' has been removed with a a call to
-    // SocketManager::close. For example, it could be the case that a
-    // socket has gone to CLOSE_WAIT and the call to 'recv' in
-    // recv_data returned 0 causing SocketManager::close to get
-    // invoked. Later a call to 'send' or 'sendfile' (e.g., in
-    // send_data or send_file) can "succeed" (because the socket is
-    // not "closed" yet because there are still some Socket
-    // references, namely the reference being used in send_data or
-    // send_file!). However, when SocketManger::next is actually
-    // invoked we find out there there is no more data and thus stop
-    // sending.
-    // TODO(benh): Should we actually finish sending the data!?
-    if (sockets.count(s) > 0) {
-      CHECK(outgoing.count(s) > 0);
-
-      if (!outgoing[s].empty()) {
-        // More messages!
-        Encoder* encoder = outgoing[s].front();
-        outgoing[s].pop();
-        return encoder;
-      } else {
-        // No more messages ... erase the outgoing queue.
-        outgoing.erase(s);
-
-        if (dispose.count(s) > 0) {
-          // This is either a temporary socket we created or it's a
-          // socket that we were receiving data from and possibly
-          // sending HTTP responses back on. Clean up either way.
-          if (nodes.count(s) > 0) {
-            const Node& node = nodes[s];
-            CHECK(temps.count(node) > 0 && temps[node] == s);
-            temps.erase(node);
-            nodes.erase(s);
-          }
-
-          if (proxies.count(s) > 0) {
-            proxy = proxies[s];
-            proxies.erase(s);
-          }
-
-          dispose.erase(s);
-          sockets.erase(s);
-
-          // We don't actually close the socket (we wait for the Socket
-          // abstraction to close it once there are no more references),
-          // but we do shutdown the receiving end so any DataDecoder
-          // will get cleaned up (which might have the last reference).
-          shutdown(s, SHUT_RD);
-        }
-      }
-    }
-  }
-
-  // We terminate the proxy outside the synchronized block to avoid
-  // possible deadlock between the ProcessManager and SocketManager
-  // (see comment in SocketManager::proxy for more information).
-  if (proxy != NULL) {
-    terminate(proxy);
-  }
-
-  return NULL;
 }
 
 
@@ -2297,16 +2185,6 @@ void SocketManager::close(int s)
     // try and close it again). Thus, ignore the request if we don't
     // know about the socket.
     if (sockets.count(s) > 0) {
-      // Clean up any remaining encoders for this socket.
-      if (outgoing.count(s) > 0) {
-        while (!outgoing[s].empty()) {
-          Encoder* encoder = outgoing[s].front();
-          delete encoder;
-          outgoing[s].pop();
-        }
-
-        outgoing.erase(s);
-      }
 
       // Clean up after sockets used for node communication.
       if (nodes.count(s) > 0) {
@@ -3603,6 +3481,323 @@ void post(const UPID& from,
   // Encode and transport outgoing message.
   transport(encode(from, to, name, string(data, length)));
 }
+
+
+namespace internal {
+
+
+struct AsyncConnect {
+  AsyncConnect(Socket&& _socket) : socket(std::move(_socket)) {}
+  Promise<Socket> promise;
+  Socket socket;
+};
+
+
+void async_receiving_connect(struct ev_loop* loop, ev_io* watcher, int revents)
+{
+  int s = watcher->fd;
+  AsyncConnect* asyncConnect = reinterpret_cast<AsyncConnect*>(watcher->data);
+
+  // Now check that a successful connection was made.
+  int opt;
+  socklen_t optlen = sizeof(opt);
+
+  if (getsockopt(s, SOL_SOCKET, SO_ERROR, &opt, &optlen) < 0 || opt != 0) {
+    // Connect failure.
+    VLOG(1) << "Socket error while connecting";
+    asyncConnect->promise.fail("Socket error while connecting");
+  } else {
+    asyncConnect->promise.set(asyncConnect->socket);
+  }
+  ev_io_stop(loop, watcher);
+  delete watcher;
+  delete asyncConnect;
+}
+
+
+Future<Socket> connect_success(const Socket& socket, Socket::Impl* impl)
+{
+  impl->setConnectionState(Socket::connected);
+  return socket;
+}
+
+
+void connect_fail(const string&, Socket::Impl* impl)
+{
+  impl->setConnectionState(Socket::connectionFailed);
+}
+
+
+} // namespace internal {
+
+
+Future<Socket> LibevSocketImpl::connect(const Node& node)
+{
+  self = shared_from_this();
+  sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = PF_INET;
+  addr.sin_port = htons(node.port);
+  addr.sin_addr.s_addr = node.ip;
+
+  lock_guard<mutex> lock(_mutex);
+  _connectionState = Socket::establishingConnection;
+
+  if (::connect(s, (sockaddr*) &addr, sizeof(addr)) < 0) {
+    if (errno != EINPROGRESS) {
+      return Failure(ErrnoError("Failed to connect socket"));
+    }
+    internal::AsyncConnect* asyncConnect =
+        new internal::AsyncConnect(socket());
+    ev_io* watcher = new ev_io();
+    watcher->data = asyncConnect;
+
+    connectionFuture = asyncConnect->promise.future()
+      .then(lambda::bind(&internal::connect_success, lambda::_1, this))
+      .onFailed(lambda::bind(&internal::connect_fail, lambda::_1, this));
+
+    // Wait for socket to be connected.
+    ev_io_init(watcher, internal::async_receiving_connect, s, EV_WRITE);
+
+    // Enqueue the watcher.
+    synchronized (watchers) {
+      watchers->push(watcher);
+    }
+
+    // Interrupt the loop.
+    ev_async_send(loop, &async_watcher);
+
+    return connectionFuture.get();
+  } else {
+    _connectionState = Socket::connected;
+    return socket();
+  }
+}
+
+
+Future<Socket> LibevSocketImpl::onConnected()
+{
+  lock_guard<mutex> lock(_mutex);
+  CHECK(_connectionState != Socket::notConnected)
+    << "onConnected() must be called on a socket that is establishing or has "
+    << "established a connection";
+  if (_connectionState == Socket::establishingConnection) {
+    CHECK(connectionFuture.isSome());
+    return connectionFuture.get();
+  }
+  return socket();
+}
+
+
+void LibevSocketImpl::onRead(const std::function<void (const char*, size_t)>& cb)
+{
+  lock_guard<mutex> lock(_mutex);
+  CHECK(!hasReadCb) << "Can not assign multiple read callbacks";
+  onReadCb = cb;
+  hasReadCb = true;
+  // Enqueue the watcher.
+  synchronized (watchers) {
+    watchers->push(&readWatcher);
+  }
+
+  // Interrupt the loop.
+  ev_async_send(loop, &async_watcher);
+}
+
+
+void LibevSocketImpl::readReady(const char* data, size_t length)
+{
+  std::function<void (const char*, size_t)>* cb = NULL;
+  {
+    lock_guard<mutex> lock(_mutex);
+    if (hasReadCb) {
+      cb = &onReadCb;
+    }
+  }
+  if (cb != NULL) {
+    (*cb)(data, length);
+  }
+}
+
+
+void LibevSocketImpl::onClose(const std::function<void (const Socket& socket)>& cb)
+{
+  bool do_call = false;
+  {
+    lock_guard<mutex> lock(_mutex);
+    if (_connectionState == Socket::connectionClosed) {
+      do_call = true;
+    } else {
+      CHECK(!hasCloseCb) << "Can not assign multiple close callbacks";
+      onCloseCb = cb;
+      hasCloseCb = true;
+    }
+  }
+  if (do_call) {
+    cb(socket());
+  }
+}
+
+
+void LibevSocketImpl::closeSocket()
+{
+  std::function<void (const Socket& socket)>* cb = NULL;
+  std::queue<SendRequest*> sendReqs;
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    _connectionState = Socket::connectionClosed;
+    if (hasCloseCb) {
+      cb = &onCloseCb;
+    }
+    std::swap(sendReqs, sendRequests);
+  }
+  ev_io_stop(loop, &readWatcher);
+  ev_io_stop(loop, &sendWatcher);
+  while (!sendReqs.empty()) {
+    SendRequest* req = sendReqs.front();
+    req->promise.fail("socket closed");
+    delete req;
+    sendReqs.pop();
+  }
+  self.reset();
+  if (cb) {
+    (*cb)(socket());
+  }
+}
+
+void LibevSocketImpl::drainAndClose()
+{
+  std::lock_guard<std::mutex> lock(_mutex);
+  closeOnDrain = true;
+}
+
+
+
+Future<Nothing> LibevSocketImpl::send(const char* data, size_t length)
+{
+  return enqueueSendRequest(new SendDataRequest(data, length));
+}
+
+
+Future<Nothing> LibevSocketImpl::sendFile(int fd, size_t length)
+{
+  return enqueueSendRequest(new SendFileRequest(fd, length));
+}
+
+Future<Nothing> LibevSocketImpl::enqueueSendRequest(SendRequest* request) {
+  if (!self) {
+    self = shared_from_this();
+  }
+  bool was_empty;
+  Future<Nothing> result;
+  {
+    std::lock_guard<std::mutex> sendLock(sendMutex);
+    was_empty = sendRequests.empty();
+    sendRequests.emplace(request);
+    result = request->promise.future();
+  }
+  if (was_empty) {
+    // Enqueue the watcher.
+    bool is_establishing;
+    {
+      std::lock_guard<std::mutex> stateLock(_mutex);
+      is_establishing = (_connectionState == Socket::notConnected || _connectionState == Socket::establishingConnection) && notQueued;
+      if (is_establishing) {
+        notQueued = false;
+      }
+    }
+    if (!is_establishing) {
+      synchronized (watchers) {
+        watchers->push(&sendWatcher);
+      }
+      ev_async_send(loop, &async_watcher);
+    } else {
+      onConnected().then([this](const Socket& socket) {
+        synchronized (watchers) {
+          watchers->push(&sendWatcher);
+        }
+        ev_async_send(loop, &async_watcher);
+        return socket;
+      });
+    }
+  }
+  return result;
+}
+
+
+void LibevSocketImpl::trySend()
+{
+  bool keep_going = true;
+  while (keep_going) {
+    SendRequest* request = NULL;
+    {
+      std::lock_guard<std::mutex> sendLock(sendMutex);
+      CHECK(!sendRequests.empty()) << "Logic error: should not try to send when there is nothing to send";
+      request = sendRequests.front();
+    }
+    CHECK(request) << "trySend requires request to send";
+
+    ssize_t result = 0;
+    switch (request->getKind()) {
+      case Encoder::data_encoder: {
+        SendDataRequest* dataRequest = reinterpret_cast<SendDataRequest*>(request);
+        result = ::send(s, dataRequest->data, dataRequest->length, MSG_NOSIGNAL);
+        break;
+      }
+      case Encoder::file_encoder: {
+        SendFileRequest* fileRequest = reinterpret_cast<SendFileRequest*>(request);
+        result = os::sendfile(s, fileRequest->fd, fileRequest->offset, fileRequest->length);
+        break;
+      }
+    }
+
+    if (result < 0 && (errno == EINTR)) {
+      continue;
+    } else if (result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      break;
+    } else if (result <= 0) {
+      // Socket error or closed.
+      if (result < 0) {
+        const char* error = strerror(errno);
+        VLOG(1) << "Socket error while sending: " << error;
+      } else {
+        VLOG(1) << "Socket closed while sending";
+      }
+      closeSocket();
+      return;
+    } else {
+      CHECK(result > 0);
+
+      request->advance(result);
+
+      if (request->finished()) {
+        bool is_empty = false;
+        {
+          request->promise.set(Nothing());
+          std::lock_guard<std::mutex> sendLock(sendMutex);
+          sendRequests.pop();
+          is_empty = sendRequests.empty();
+          if (is_empty) {
+            ev_io_stop(loop, &sendWatcher);
+          }
+        }
+        if (is_empty) {
+          bool close_on_drain;
+          {
+            std::lock_guard<std::mutex> stateLock(_mutex);
+            close_on_drain = closeOnDrain;
+          }
+          if (closeOnDrain) {
+            closeSocket();
+          }
+        }
+        delete request;
+        keep_going = !is_empty;
+      }
+    }
+  }
+}
+
 
 
 namespace io {

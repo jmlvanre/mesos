@@ -3,6 +3,11 @@
 
 #include <assert.h>
 
+#include <mutex>
+
+#include <process/future.hpp>
+#include <process/node.hpp>
+
 #include <stout/abort.hpp>
 #include <stout/nothing.hpp>
 #include <stout/memory.hpp>
@@ -41,33 +46,64 @@ inline Try<int> socket(int family, int type, int protocol) {
 class Socket
 {
 public:
-  class Impl
+  enum connectionState {
+    notConnected,
+    establishingConnection,
+    connected,
+    connectionClosed,
+    connectionFailed
+  };
+
+  enum socketKind {
+    libev,
+    uninitialized
+  };
+
+  class Impl : public std::enable_shared_from_this<Impl>
   {
   public:
-    Impl(int _s) : s(_s) {}
-
-    ~Impl()
-    {
-      if (s >= 0) {
-        Try<Nothing> close = os::close(s);
-        if (close.isError()) {
-          ABORT("Failed to close socket: " + close.error());
-        }
-      }
-    }
+    virtual ~Impl() {}
 
     operator int () const
     {
       return s;
     }
 
-  private:
+    virtual Future<Socket> connect(const Node& node) = 0;
+
+    virtual Future<Socket> onConnected() = 0;
+
+    virtual void onRead(const std::function<void (const char*, size_t)>& cb) = 0;
+    virtual void readReady(const char* data, size_t length) = 0;
+
+    virtual void setConnectionState(const connectionState connState) = 0;
+
+    virtual void onClose(const std::function<void (const Socket& socket)>& cb) = 0;
+    virtual void closeSocket() = 0;
+    virtual void drainAndClose() = 0;
+
+    virtual Future<Nothing> send(const char* data, size_t length) = 0;
+    virtual Future<Nothing> sendFile(int fd, size_t length) = 0;
+    virtual void trySend() = 0;
+
+  protected:
+    Impl(int _s, connectionState connState) : s(_s), _connectionState(connState) {}
+
+    Socket socket() {
+      return Socket(shared_from_this());
+    }
+
     int s;
+    connectionState _connectionState;
   };
 
-  Socket() {}
+  Socket(socketKind _kind = uninitialized) : kind(_kind) {
+    if (kind == libev) {
+      get();
+    }
+  }
 
-  explicit Socket(int _s) : impl(std::make_shared<Impl>(_s)) {}
+  explicit Socket(int _s, socketKind kind, connectionState _connectionState = notConnected);
 
   bool operator == (const Socket& that) const
   {
@@ -79,24 +115,71 @@ public:
     return *get();
   }
 
+  Future<Socket> connect(const Node& node, socketKind kind)
+  {
+    return get(kind)->connect(node);
+  }
+
+  Future<Socket> onConnected()
+  {
+    CHECK(impl) << "Socket must be initialized to call onConnected()";
+    return impl->onConnected();
+  }
+
+  const Socket& onRead(const std::function<void (const char*, size_t)>& cb) const
+  {
+    CHECK(impl) << "Socket must be initialized to call onRead()";
+    impl->onRead(cb);
+    return *this;
+  }
+
+  const Socket& onClose(const std::function<void (const Socket& socket)>& cb) const
+  {
+    CHECK(impl) << "Socket must be initialized to call onClose()";
+    impl->onClose(cb);
+    return *this;
+  }
+
+  void close()
+  {
+    CHECK(impl) << "Socket must be initialized to call close()";
+    return impl->closeSocket();
+  }
+
+  Future<Nothing> send(const char* data, size_t length) const
+  {
+    CHECK(impl) << "Socket must be initialized to call send()";
+    return impl->send(data, length);
+  }
+
+  Future<Nothing> sendFile(int fd, size_t length) const
+  {
+    CHECK(impl) << "Socket must be initialized to call sendFile()";
+    return impl->sendFile(fd, length);
+  }
+
+  void drainAndClose() const
+  {
+    CHECK(impl) << "Socket must be initialized to call drainAndClose()";
+    impl->drainAndClose();
+  }
+
 private:
+  Socket(std::shared_ptr<Impl>&& _impl) : impl(std::move(_impl)) {}
+
   const std::shared_ptr<Impl>& get() const
   {
-    return impl ? impl : (impl = create());
+    return impl ? impl : (impl = create(kind));
   }
 
-  static std::shared_ptr<Impl> create()
+  const std::shared_ptr<Impl>& get(socketKind _kind) const
   {
-    Try<int> fd = process::socket(
-        AF_INET,
-        SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
-        0);
-    if (fd.isError()) {
-      ABORT("Failed to create socket: " + fd.error());
-    }
-    return std::make_shared<Impl>(fd.get());
+    return impl ? impl : (impl = create(_kind));
   }
 
+  static std::shared_ptr<Impl> create(socketKind _kind);
+
+  socketKind kind;
   mutable std::shared_ptr<Impl> impl;
 };
 
