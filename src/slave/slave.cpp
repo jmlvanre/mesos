@@ -776,7 +776,7 @@ void Slave::registered(const UPID& from, const SlaveID& slaveId)
       // If we don't get a ping from the master, trigger a
       // re-registration. This needs to be done once registered,
       // in case we never receive an initial ping.
-      Timer::cancel(pingTimer);
+      Clock::cancel(pingTimer);
 
       pingTimer = delay(
           MASTER_PING_TIMEOUT(),
@@ -2544,7 +2544,7 @@ void Slave::pingOld(const UPID& from, const string& body)
   // longer considers the slave to be registered, so it is
   // essential for the slave to attempt a re-registration
   // when this occurs.
-  Timer::cancel(pingTimer);
+  Clock::cancel(pingTimer);
 
   pingTimer = delay(
       MASTER_PING_TIMEOUT(),
@@ -2576,7 +2576,7 @@ void Slave::ping(const UPID& from, bool connected)
   // longer considers the slave to be registered, so it is
   // essential for the slave to attempt a re-registration
   // when this occurs.
-  Timer::cancel(pingTimer);
+  Clock::cancel(pingTimer);
 
   pingTimer = delay(
       MASTER_PING_TIMEOUT(),
