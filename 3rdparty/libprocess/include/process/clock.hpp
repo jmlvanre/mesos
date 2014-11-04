@@ -40,7 +40,11 @@ public:
   static void advance(ProcessBase* process, const Duration& duration);
 
   static void update(const Time& time);
-  static void update(ProcessBase* process, const Time& time);
+
+  static void update(
+      ProcessBase* process,
+      const Time& time,
+      bool overwrite = false);
 
   static void order(ProcessBase* from, ProcessBase* to);
 
