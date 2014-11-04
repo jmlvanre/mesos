@@ -3179,7 +3179,7 @@ Future<Response> ProcessManager::__processes__(const Request&)
 }
 
 
-Timer Timer::create(
+Timer Clock::timer(
     const Duration& duration,
     const lambda::function<void(void)>& thunk)
 {
@@ -3213,7 +3213,7 @@ Timer Timer::create(
 }
 
 
-bool Timer::cancel(const Timer& timer)
+bool Clock::cancel(const Timer& timer)
 {
   bool canceled = false;
   synchronized (timeouts) {
