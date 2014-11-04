@@ -43,6 +43,7 @@
 
 #include <boost/shared_array.hpp>
 
+#include <process/check.hpp>
 #include <process/clock.hpp>
 #include <process/defer.hpp>
 #include <process/delay.hpp>
@@ -478,11 +479,6 @@ static queue<lambda::function<void(void)> >* functions =
 static map<Time, list<Timer> >* timeouts = new map<Time, list<Timer> >();
 static synchronizable(timeouts) = SYNCHRONIZED_INITIALIZER_RECURSIVE;
 
-// For supporting Clock::settle(), true if timers have been removed
-// from 'timeouts' but may not have been executed yet. Protected by
-// the timeouts lock. This is only used when the clock is paused.
-static bool pending_timers = false;
-
 // Flag to indicate whether or to update the timer on async interrupt.
 static bool update_timer = false;
 
@@ -527,6 +523,11 @@ Time current = Time::epoch();
 Duration advanced = Duration::zero();
 
 bool paused = false;
+
+// For supporting Clock::settled(), false if we're not currently
+// settling (or we're not paused), true if we're currently attempting
+// to settle (and we're paused).
+bool settling = false;
 
 } // namespace clock {
 
@@ -599,6 +600,7 @@ void Clock::resume()
     if (clock::paused) {
       VLOG(2) << "Clock resumed at " << clock::current;
       clock::paused = false;
+      clock::settling = false;
       clock::currents->clear();
       update_timer = true;
       ev_async_send(loop, &async_watcher);
@@ -670,6 +672,7 @@ void Clock::update(ProcessBase* process, const Time& time)
 
 void Clock::order(ProcessBase* from, ProcessBase* to)
 {
+  VLOG(2) << "Clock of " << to->self() << " being updated to " << from->self();
   update(to, now(from));
 }
 
@@ -678,6 +681,28 @@ void Clock::settle()
 {
   CHECK(clock::paused); // TODO(benh): Consider returning a bool instead.
   process_manager->settle();
+}
+
+
+bool Clock::settled()
+{
+  synchronized (timeouts) {
+    CHECK(clock::paused);
+
+    if (update_timer) {
+      return false;
+    } else if (clock::settling) {
+      VLOG(3) << "Clock still not settled";
+      return false;
+    } else if (timeouts->size() == 0 ||
+               timeouts->begin()->first > clock::current) {
+      VLOG(3) << "Clock is settled";
+      return true;
+    } else {
+      VLOG(3) << "Clock is not settled";
+      return false;
+    }
+  }
 }
 
 
@@ -881,9 +906,12 @@ void handle_timeouts(struct ev_loop* loop, ev_timer* _, int revents)
 
       VLOG(3) << "Have timeout(s) at " << timeout;
 
-      // Record that we have pending timers to execute so the
-      // Clock::settle() operation can wait until we're done.
-      pending_timers = true;
+      // Need to toggle 'settling' so that we don't prematurely say
+      // we're settled until after the timers are executed below,
+      // outside of the critical section.
+      if (clock::paused) {
+        clock::settling = true;
+      }
 
       foreach (const Timer& timer, (*timeouts)[timeout]) {
         timedout.push_back(timer);
@@ -946,11 +974,16 @@ void handle_timeouts(struct ev_loop* loop, ev_timer* _, int revents)
     timer();
   }
 
-  // Mark ourselves as done executing the timers since it's now safe
-  // for a call to Clock::settle() to check if there will be any
-  // future timeouts reached.
+  // Mark 'settling' as false since there are not any more timeouts
+  // that will expire before the paused time and we've finished
+  // executing expired timers.
   synchronized (timeouts) {
-    pending_timers = false;
+    if (clock::paused &&
+        (timeouts->size() == 0 ||
+         timeouts->begin()->first > clock::current)) {
+      VLOG(3) << "Clock has settled";
+      clock::settling = false;
+    }
   }
 }
 
@@ -2980,7 +3013,15 @@ bool ProcessManager::wait(const UPID& pid)
           list<ProcessBase*>::iterator it =
             find(runq.begin(), runq.end(), process);
           if (it != runq.end()) {
+            // Found it! Remove it from the run queue since we'll be
+            // donating our thread and also increment 'running' before
+            // leaving this 'runq' protected critical section so that
+            // everyone that is waiting for the processes to settle
+            // continue to wait (otherwise they could see nothing in
+            // 'runq' and 'running' equal to 0 between when we exit
+            // this critical section and increment 'running').
             runq.erase(it);
+            __sync_fetch_and_add(&running, 1);
           } else {
             // Another thread has resumed the process ...
             process = NULL;
@@ -2996,7 +3037,6 @@ bool ProcessManager::wait(const UPID& pid)
   if (process != NULL) {
     VLOG(2) << "Donating thread to " << process->pid << " while waiting";
     ProcessBase* donator = __process__;
-    __sync_fetch_and_add(&running, 1);
     process_manager->resume(process);
     __process__ = donator;
   }
@@ -3065,30 +3105,34 @@ void ProcessManager::settle()
 {
   bool done = true;
   do {
+    // While refactoring in order to isolate libev behind abstractions
+    // it became evident that this os::sleep is vital for tests to
+    // pass. In particular, there are certain tests that assume too
+    // much before they attempt to do a settle. One such example is
+    // tests doing http::get followed by Clock::settle, where they
+    // expect the http::get will have properly enqueued a process on
+    // the run queue but in actuallity http::get is just sending bytes
+    // on a socket. Without sleeping at the beginning of this function
+    // we can get unlucky and appear settled when in actuallity the
+    // kernel just hasn't copied the bytes to a socket or we haven't
+    // yet read the bytes and enqueued an event on a process (and the
+    // process on the run queue).
     os::sleep(Milliseconds(10));
-    done = true;
-    // Hopefully this is the only place we acquire both these locks.
+
+    done = true; // Assume to start that we are settled.
+
     synchronized (runq) {
-      synchronized (timeouts) {
-        CHECK(Clock::paused()); // Since another thread could resume the clock!
+      if (!runq.empty()) {
+        done = false;
+      }
 
-        if (!runq.empty()) {
-          done = false;
-        }
+      __sync_synchronize(); // Read barrier for 'running'.
+      if (running > 0) {
+        done = false;
+      }
 
-        __sync_synchronize(); // Read barrier for 'running'.
-        if (running > 0) {
-          done = false;
-        }
-
-        if (timeouts->size() > 0 &&
-            timeouts->begin()->first <= clock::current) {
-          done = false;
-        }
-
-        if (pending_timers) {
-          done = false;
-        }
+      if (!Clock::settled()) {
+        done = false;
       }
     }
   } while (!done);
@@ -3192,7 +3236,8 @@ Timer Clock::timer(
 
   Timer timer(__sync_fetch_and_add(&id, 1), timeout, pid, thunk);
 
-  VLOG(3) << "Created a timer for " << timeout.time();
+  VLOG(3) << "Created a timer for " << pid << " in " << stringify(duration)
+          << " in the future (" << timeout.time() << ")";
 
   // Add the timer.
   synchronized (timeouts) {
