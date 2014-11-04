@@ -1,11 +1,12 @@
 #ifndef __PROCESS_CLOCK_HPP__
 #define __PROCESS_CLOCK_HPP__
 
+#include <list>
+
 #include <process/time.hpp>
 
 #include <stout/duration.hpp>
 #include <stout/lambda.hpp>
-#include <stout/nothing.hpp>
 
 namespace process {
 
@@ -17,6 +18,10 @@ class Timer;
 class Clock
 {
 public:
+  // Initialize the clock with the specified callback that will be
+  // invoked whenever a batch of timers has expired.
+  static void initialize(lambda::function<void(std::list<Timer>&&)>&& callback);
+
   static Time now();
   static Time now(ProcessBase* process);
 
