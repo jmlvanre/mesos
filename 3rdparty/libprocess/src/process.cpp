@@ -452,8 +452,13 @@ static ProcessManager* process_manager = NULL;
 // Event loop.
 static struct ev_loop* loop = NULL;
 
-// Asynchronous watcher for interrupting loop.
+// Asynchronous watcher for interrupting loop to specifically deal
+// with IO watchers and functions (via run_in_event_loop).
 static ev_async async_watcher;
+
+// Asynchronous watcher for interrupting loop to specifically deal
+// with updating timers.
+static ev_async async_update_timer_watcher;
 
 // Watcher for timeouts.
 static ev_timer timeouts_watcher;
@@ -612,7 +617,7 @@ void Clock::resume()
       clock::settling = false;
       clock::currents->clear();
       update_timer = true;
-      ev_async_send(loop, &async_watcher);
+      ev_async_send(loop, &async_update_timer_watcher);
     }
   }
 }
@@ -627,7 +632,7 @@ void Clock::advance(const Duration& duration)
       VLOG(2) << "Clock advanced ("  << duration << ") to " << clock::current;
       if (!update_timer) {
         update_timer = true;
-        ev_async_send(loop, &async_watcher);
+        ev_async_send(loop, &async_update_timer_watcher);
       }
     }
   }
@@ -658,7 +663,7 @@ void Clock::update(const Time& time)
         VLOG(2) << "Clock updated to " << clock::current;
         if (!update_timer) {
           update_timer = true;
-          ev_async_send(loop, &async_watcher);
+          ev_async_send(loop, &async_update_timer_watcher);
         }
       }
     }
@@ -868,7 +873,11 @@ void handle_async(struct ev_loop* loop, ev_async* _, int revents)
       functions->pop();
     }
   }
+}
 
+
+void handle_async_update_timer(struct ev_loop* loop, ev_async* _, int revents)
+{
   synchronized (timeouts) {
     if (update_timer) {
       if (!timeouts->empty()) {
@@ -1621,6 +1630,9 @@ void initialize(const string& delegate)
 
   ev_async_init(&async_watcher, handle_async);
   ev_async_start(loop, &async_watcher);
+
+  ev_async_init(&async_update_timer_watcher, handle_async_update_timer);
+  ev_async_start(loop, &async_update_timer_watcher);
 
   ev_timer_init(&timeouts_watcher, handle_timeouts, 0., 2100000.0);
   ev_timer_again(loop, &timeouts_watcher);
@@ -3239,7 +3251,7 @@ Timer Clock::timer(
       // Need to interrupt the loop to update/set timer repeat.
       (*timeouts)[timer.timeout().time()].push_back(timer);
       update_timer = true;
-      ev_async_send(loop, &async_watcher);
+      ev_async_send(loop, &async_update_timer_watcher);
     } else {
       // Timer repeat is adequate, just add the timeout.
       CHECK(timeouts->size() >= 1);
