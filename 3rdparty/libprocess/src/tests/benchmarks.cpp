@@ -82,7 +82,7 @@ public:
 
   void setLink(const UPID& that)
   {
-    link(that);
+    //link(that);
   }
 
   void start()
@@ -173,8 +173,8 @@ void createPipes(pipes& _pipes)
 // requests outstanding to the 'server' actor.
 TEST(Process, Process_BENCHMARK_Test)
 {
-  const int iterations = 2500;
-  const int queueDepth = 250;
+  const int iterations = 250000;
+  const int queueDepth = 1;
   const int clients = 8;
   const int numberOfProcesses = 4;
 

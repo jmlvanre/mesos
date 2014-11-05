@@ -1548,7 +1548,10 @@ Future<Socket> Socket::Impl::connect(const Node& node)
     auto result = connect->promise.future();
 
     io::poll(s, io::WRITE)
-      .onAny(lambda::bind(&internal::connect, Socket(shared_from_this()), connect));
+      .onAny(lambda::bind(
+                 &internal::connect,
+                 Socket(shared_from_this()),
+                 connect));
 
     return result;
   }
@@ -1768,7 +1771,10 @@ void SocketManager::send(Message* message)
       outgoing[s];
 
       socket.connect(node)
-        .then(lambda::bind(&internal::send_connect_success, lambda::_1, message))
+        .then(lambda::bind(
+                  &internal::send_connect_success,
+                  lambda::_1,
+                  message))
         .onFailed(lambda::bind(&internal::send_connect_fail, lambda::_1));
     }
   }
