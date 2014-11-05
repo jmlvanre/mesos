@@ -1545,10 +1545,12 @@ Future<Socket> Socket::Impl::connect(const Node& node)
 
     internal::Connect* connect = new internal::Connect();
 
+    auto result = connect->promise.future();
+
     io::poll(s, io::WRITE)
       .onAny(lambda::bind(&internal::connect, Socket(shared_from_this()), connect));
 
-    return connect->promise.future();
+    return result;
   }
   return Socket(shared_from_this());
 }
@@ -1714,7 +1716,7 @@ namespace internal {
 Future<Socket> send_connect_success(const Socket& socket, Message* message)
 {
   Encoder* encoder = new MessageEncoder(socket, message);
-  
+
   // Read and ignore data from this socket. Note that we don't
   // expect to receive anything other than HTTP '202 Accepted'
   // responses which we just ignore.
