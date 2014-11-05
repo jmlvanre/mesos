@@ -1713,13 +1713,14 @@ namespace internal {
 
 Future<Socket> send_connect_success(const Socket& socket, Message* message)
 {
+  Encoder* encoder = new MessageEncoder(socket, message);
+  
   // Read and ignore data from this socket. Note that we don't
   // expect to receive anything other than HTTP '202 Accepted'
   // responses which we just ignore.
   io::poll(socket, io::READ)
     .onAny(lambda::bind(&ignore_data, new Socket(socket), socket));
 
-  Encoder* encoder = new MessageEncoder(socket, message);
   // Start polling in order to send data.
   io::poll(socket, io::WRITE)
     .onAny(lambda::bind(&send_data, encoder));
