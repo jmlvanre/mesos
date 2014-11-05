@@ -3,6 +3,11 @@
 
 #include <assert.h>
 
+#include <memory>
+
+#include <process/future.hpp>
+#include <process/node.hpp>
+
 #include <stout/abort.hpp>
 #include <stout/nothing.hpp>
 #include <stout/memory.hpp>
@@ -41,7 +46,7 @@ inline Try<int> socket(int family, int type, int protocol) {
 class Socket
 {
 public:
-  class Impl
+  class Impl : public std::enable_shared_from_this<Impl>
   {
   public:
     Impl(int _s) : s(_s) {}
@@ -61,6 +66,8 @@ public:
       return s;
     }
 
+    Future<Socket> connect(const Node& node);
+
   private:
     int s;
   };
@@ -79,7 +86,14 @@ public:
     return *get();
   }
 
+  Future<Socket> connect(const Node& node)
+  {
+    return get()->connect(node);
+  }
+
 private:
+  explicit Socket(std::shared_ptr<Impl>&& that) : impl(std::move(that)) {}
+
   const std::shared_ptr<Impl>& get() const
   {
     return impl ? impl : (impl = create());
