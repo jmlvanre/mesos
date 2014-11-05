@@ -68,6 +68,8 @@ public:
 
     Future<Socket> connect(const Node& node);
 
+    Future<size_t> read(char* data, size_t length);
+
   private:
     int s;
   };
@@ -89,6 +91,11 @@ public:
   Future<Socket> connect(const Node& node)
   {
     return get()->connect(node);
+  }
+
+  Future<size_t> read(char* data, size_t length)
+  {
+    return get()->read(data, length);
   }
 
 private:

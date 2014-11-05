@@ -592,56 +592,6 @@ void handle_async(struct ev_loop* loop, ev_async* _, int revents)
 }
 
 
-void recv_data(DataDecoder* decoder, int s)
-{
-  while (true) {
-    const ssize_t size = 80 * 1024;
-    ssize_t length = 0;
-
-    char data[size];
-
-    length = recv(s, data, size, 0);
-
-    if (length < 0 && (errno == EINTR)) {
-      // Interrupted, try again now.
-      continue;
-    } else if (length < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      // Might block, try again later.
-      io::poll(s, io::READ)
-        .onAny(lambda::bind(&recv_data, decoder, s));
-      break;
-    } else if (length <= 0) {
-      // Socket error or closed.
-      if (length < 0) {
-        const char* error = strerror(errno);
-        VLOG(1) << "Socket error while receiving: " << error;
-      } else {
-        VLOG(2) << "Socket closed while receiving";
-      }
-      socket_manager->close(s);
-      delete decoder;
-      break;
-    } else {
-      CHECK(length > 0);
-
-      // Decode as much of the data as possible into HTTP requests.
-      const deque<Request*>& requests = decoder->decode(data, length);
-
-      if (!requests.empty()) {
-        foreach (Request* request, requests) {
-          process_manager->handle(decoder->socket(), request);
-        }
-      } else if (requests.empty() && decoder->failed()) {
-        VLOG(1) << "Decoder error while receiving";
-        socket_manager->close(s);
-        delete decoder;
-        break;
-      }
-    }
-  }
-}
-
-
 // A variant of 'recv_data' that doesn't do anything with the
 // data. Used by sockets created via SocketManager::link as well as
 // SocketManager::send(Message) where we don't care about the data
@@ -843,6 +793,66 @@ void receiving_connect(Socket* socket, int s)
 }
 
 
+namespace internal {
+
+void decode_read_failed(
+    const std::string&,
+    char* buffer,
+    Socket &socket,
+    DataDecoder* decoder)
+{
+  socket_manager->close(socket);
+  delete[] buffer;
+  delete decoder;
+}
+
+
+size_t decode_read_ready(
+    size_t length,
+    char* buffer,
+    size_t bufferSize,
+    Socket &socket,
+    DataDecoder* decoder)
+{
+  if (length == 0) {
+    socket_manager->close(socket);
+    delete[] buffer;
+    delete decoder;
+    return length;
+  }
+  // Decode as much of the data as possible into HTTP requests.
+  const deque<Request*>& requests = decoder->decode(buffer, length);
+
+  if (!requests.empty()) {
+    foreach (Request* request, requests) {
+      process_manager->handle(decoder->socket(), request);
+    }
+  } else if (requests.empty() && decoder->failed()) {
+    VLOG(1) << "Decoder error while receiving";
+    socket_manager->close(socket);
+    delete[] buffer;
+    delete decoder;
+  }
+  socket.read(buffer, bufferSize)
+    .then(lambda::bind(
+        &decode_read_ready,
+        lambda::_1,
+        buffer,
+        bufferSize,
+        socket,
+        decoder))
+    .onFailed(lambda::bind(
+        &decode_read_failed,
+        lambda::_1,
+        buffer,
+        socket,
+        decoder));
+  return length;
+}
+
+} // namespace internal {
+
+
 void accept(struct ev_loop* loop, ev_io* watcher, int revents)
 {
   CHECK_EQ(__s__, watcher->fd);
@@ -880,11 +890,28 @@ void accept(struct ev_loop* loop, ev_io* watcher, int revents)
     os::close(s);
   } else {
     // Inform the socket manager for proper bookkeeping.
-    const Socket& socket = socket_manager->accepted(s);
+    Socket socket = socket_manager->accepted(s);
 
-    // Start reading from the socket.
-    io::poll(s, io::READ)
-      .onAny(lambda::bind(&recv_data, new DataDecoder(socket), s));
+    const size_t bufferSize = 80 * 1024;
+    char* buffer = new char[bufferSize];
+    memset(buffer, 0, bufferSize);
+
+    DataDecoder* decoder = new DataDecoder(socket);
+
+    socket.read(buffer, bufferSize)
+      .then(lambda::bind(
+          &internal::decode_read_ready,
+          lambda::_1,
+          buffer,
+          bufferSize,
+          socket,
+          decoder))
+      .onFailed(lambda::bind(
+          &internal::decode_read_failed,
+          lambda::_1,
+          buffer,
+          socket,
+          decoder));
   }
 }
 
@@ -1559,6 +1586,14 @@ Future<Socket> Socket::Impl::connect(const Node& node)
 }
 
 
+Future<size_t> Socket::Impl::read(char* data, size_t length)
+{
+  CHECK(s > 0) << "Read requires an initialized socket.";
+
+  return io::read(s, data, length);
+}
+
+
 SocketManager::SocketManager()
 {
   synchronizer(this) = SYNCHRONIZED_INITIALIZER_RECURSIVE;
@@ -1789,8 +1824,8 @@ Encoder* SocketManager::next(int s)
     // We cannot assume 'sockets.count(s) > 0' here because it's
     // possible that 's' has been removed with a a call to
     // SocketManager::close. For example, it could be the case that a
-    // socket has gone to CLOSE_WAIT and the call to 'recv' in
-    // recv_data returned 0 causing SocketManager::close to get
+    // socket has gone to CLOSE_WAIT and the call to read in
+    // io::read returned 0 causing SocketManager::close to get
     // invoked. Later a call to 'send' or 'sendfile' (e.g., in
     // send_data or send_file) can "succeed" (because the socket is
     // not "closed" yet because there are still some Socket
