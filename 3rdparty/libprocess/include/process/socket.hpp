@@ -93,7 +93,7 @@ public:
     return get()->connect(node);
   }
 
-  Future<size_t> read(char* data, size_t length)
+  Future<size_t> read(char* data, size_t length) const
   {
     return get()->read(data, length);
   }

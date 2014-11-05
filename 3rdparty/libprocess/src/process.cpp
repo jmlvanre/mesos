@@ -592,48 +592,6 @@ void handle_async(struct ev_loop* loop, ev_async* _, int revents)
 }
 
 
-// A variant of 'recv_data' that doesn't do anything with the
-// data. Used by sockets created via SocketManager::link as well as
-// SocketManager::send(Message) where we don't care about the data
-// received we mostly just want to know when the socket has been
-// closed.
-void ignore_data(Socket* socket, int s)
-{
-  while (true) {
-    const ssize_t size = 80 * 1024;
-    ssize_t length = 0;
-
-    char data[size];
-
-    length = recv(s, data, size, 0);
-
-    if (length < 0 && (errno == EINTR)) {
-      // Interrupted, try again now.
-      continue;
-    } else if (length < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      // Might block, try again later.
-      io::poll(s, io::READ)
-        .onAny(lambda::bind(&ignore_data, socket, s));
-      break;
-    } else if (length <= 0) {
-      // Socket error or closed.
-      if (length < 0) {
-        const char* error = strerror(errno);
-        VLOG(1) << "Socket error while receiving: " << error;
-      } else {
-        VLOG(2) << "Socket closed while receiving";
-      }
-      socket_manager->close(s);
-      delete socket;
-      break;
-    } else {
-      VLOG(2) << "Ignoring " << length << " bytes of data received "
-              << "on socket used only for sending";
-    }
-  }
-}
-
-
 void send_data(Encoder* e)
 {
   DataEncoder* encoder = CHECK_NOTNULL(dynamic_cast<DataEncoder*>(e));
@@ -749,46 +707,6 @@ void send_file(Encoder* e)
         break;
       }
     }
-  }
-}
-
-
-void sending_connect(Encoder* encoder)
-{
-  int s = encoder->socket();
-
-  // Now check that a successful connection was made.
-  int opt;
-  socklen_t optlen = sizeof(opt);
-
-  if (getsockopt(s, SOL_SOCKET, SO_ERROR, &opt, &optlen) < 0 || opt != 0) {
-    // Connect failure.
-    VLOG(1) << "Socket error while connecting";
-    socket_manager->close(s);
-    delete encoder;
-  } else {
-    // We're connected! Now let's do some sending.
-    io::poll(s, io::WRITE)
-      .onAny(lambda::bind(&send_data, encoder));
-  }
-}
-
-
-void receiving_connect(Socket* socket, int s)
-{
-  // Now check that a successful connection was made.
-  int opt;
-  socklen_t optlen = sizeof(opt);
-
-  if (getsockopt(s, SOL_SOCKET, SO_ERROR, &opt, &optlen) < 0 || opt != 0) {
-    // Connect failure.
-    VLOG(1) << "Socket error while connecting";
-    socket_manager->close(s);
-    delete socket;
-  } else {
-    // We're connected! Now let's do some receiving.
-    io::poll(s, io::READ)
-      .onAny(lambda::bind(&ignore_data, socket, s));
   }
 }
 
@@ -1615,10 +1533,50 @@ Socket SocketManager::accepted(int s)
 
 namespace internal {
 
+void _ignore_read_data(const Socket &socket, char* buffer, size_t bufferSize);
+
+
+void ignore_read_failed(const string&, Socket& socket, char* buffer)
+{
+  delete[] buffer;
+  socket_manager->close(socket);
+}
+
+
+size_t ignore_read_ready(size_t length, Socket& socket, char* buffer, size_t bufferSize)
+{
+  if (length == 0) {
+    delete[] buffer;
+    socket_manager->close(socket);
+    return length;
+  }
+  _ignore_read_data(socket, buffer, bufferSize);
+  return length;
+}
+
+
+void _ignore_read_data(const Socket &socket, char* buffer, size_t bufferSize)
+{
+  socket.read(buffer, bufferSize)
+    .then(lambda::bind(&ignore_read_ready, lambda::_1, socket, buffer, bufferSize))
+    .onFailed(lambda::bind(&ignore_read_failed, lambda::_1, socket, buffer));
+}
+
+
+void ignore_read_data(const Socket &socket)
+{
+  size_t bufferSize = 80 * 1024;
+  char* buffer = new char[bufferSize];
+  _ignore_read_data(socket, buffer, bufferSize);
+}
+
+} // namespace internal {
+
+namespace internal {
+
 Future<Socket> link_connect_success(const Socket& socket)
 {
-  io::poll(socket, io::READ)
-    .onAny(lambda::bind(&ignore_data, new Socket(socket), socket));
+  ignore_read_data(socket);
   return socket;
 }
 
@@ -1758,8 +1716,7 @@ Future<Socket> send_connect_success(const Socket& socket, Message* message)
   // Read and ignore data from this socket. Note that we don't
   // expect to receive anything other than HTTP '202 Accepted'
   // responses which we just ignore.
-  io::poll(socket, io::READ)
-    .onAny(lambda::bind(&ignore_data, new Socket(socket), socket));
+  ignore_read_data(socket);
 
   // Start polling in order to send data.
   io::poll(socket, io::WRITE)
