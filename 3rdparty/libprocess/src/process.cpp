@@ -1543,7 +1543,11 @@ void ignore_read_failed(const string&, Socket& socket, char* buffer)
 }
 
 
-size_t ignore_read_ready(size_t length, Socket& socket, char* buffer, size_t bufferSize)
+size_t ignore_read_ready(
+    size_t length,
+    Socket& socket,
+    char* buffer,
+    size_t bufferSize)
 {
   if (length == 0) {
     delete[] buffer;
@@ -1558,7 +1562,12 @@ size_t ignore_read_ready(size_t length, Socket& socket, char* buffer, size_t buf
 void _ignore_read_data(const Socket &socket, char* buffer, size_t bufferSize)
 {
   socket.read(buffer, bufferSize)
-    .then(lambda::bind(&ignore_read_ready, lambda::_1, socket, buffer, bufferSize))
+    .then(lambda::bind(
+        &ignore_read_ready,
+        lambda::_1,
+        socket,
+        buffer,
+        bufferSize))
     .onFailed(lambda::bind(&ignore_read_failed, lambda::_1, socket, buffer));
 }
 
