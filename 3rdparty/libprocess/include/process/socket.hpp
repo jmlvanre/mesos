@@ -70,6 +70,10 @@ public:
 
     Future<size_t> read(char* data, size_t length);
 
+    Future<size_t> send(const char* data, size_t length);
+
+    Future<size_t> sendFile(int fd, off_t offset, size_t length);
+
   private:
     int s;
   };
@@ -96,6 +100,16 @@ public:
   Future<size_t> read(char* data, size_t length) const
   {
     return get()->read(data, length);
+  }
+
+  Future<size_t> send(const char* data, size_t length) const
+  {
+    return get()->send(data, length);
+  }
+
+  Future<size_t> sendFile(int fd, off_t offset, size_t length) const
+  {
+    return get()->sendFile(fd, offset, length);
   }
 
 private:

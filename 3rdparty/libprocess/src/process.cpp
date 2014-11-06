@@ -1512,6 +1512,136 @@ Future<size_t> Socket::Impl::read(char* data, size_t length)
 }
 
 
+namespace internal {
+
+struct SendRequest {
+  SendRequest(const char* _data, size_t _size) : data(_data), size(_size) {}
+  const char* data;
+  size_t size;
+  Promise<size_t> promise;
+};
+
+
+void socket_send_data(int s, const char* data, size_t size, SendRequest* request)
+{
+  CHECK(size > 0);
+
+  while (true) {
+    ssize_t length = send(s, data, size, MSG_NOSIGNAL);
+
+    if (length < 0 && (errno == EINTR)) {
+      // Interrupted, try again now.
+      continue;
+    } else if (length < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      // Might block, try again later.
+      io::poll(s, io::WRITE)
+        .onAny(lambda::bind(&internal::socket_send_data, s, data, size, request));
+      return;
+    } else if (length <= 0) {
+      // Socket error or closed.
+      if (length < 0) {
+        const char* error = strerror(errno);
+        VLOG(1) << "Socket error while sending: " << error;
+      } else {
+        VLOG(1) << "Socket closed while sending";
+      }
+      if (length == 0) {
+        request->promise.set(length);
+      } else {
+        request->promise.fail("Socket send failed");
+      }
+      delete request;
+      return;
+    } else {
+      CHECK(length > 0);
+
+      request->promise.set(length);
+      delete request;
+      return;
+    }
+  }
+}
+
+
+struct SendFileRequest {
+  SendFileRequest(int _fd, off_t _offset, size_t _size) : fd(_fd), offset(_offset), size(_size) {}
+  int fd;
+  off_t offset;
+  size_t size;
+  Promise<size_t> promise;
+};
+
+void socket_send_file(int s, SendFileRequest* request)
+{
+  CHECK(request->size > 0);
+
+  while (true) {
+    ssize_t length = os::sendfile(s, request->fd, request->offset, request->size);
+
+    if (length < 0 && (errno == EINTR)) {
+      // Interrupted, try again now.
+      continue;
+    } else if (length < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      // Might block, try again later.
+      io::poll(s, io::WRITE)
+        .onAny(lambda::bind(&internal::socket_send_file, s, request));
+      return;
+    } else if (length <= 0) {
+      // Socket error or closed.
+      if (length < 0) {
+        const char* error = strerror(errno);
+        VLOG(1) << "Socket error while sending: " << error;
+      } else {
+        VLOG(1) << "Socket closed while sending";
+      }
+      if (length == 0) {
+        request->promise.set(length);
+      } else {
+        request->promise.fail("Socket sendFile failed");
+      }
+      delete request;
+      return;
+    } else {
+      CHECK(length > 0);
+
+      request->promise.set(length);
+      delete request;
+      return;
+    }
+  }
+}
+
+} // namespace internal {
+
+
+Future<size_t> Socket::Impl::send(const char* data, size_t length)
+{
+  CHECK(s > 0) << "Send requires an initialized socket.";
+
+  internal::SendRequest* request = new internal::SendRequest(data, length);
+
+  auto future = request->promise.future();
+
+  io::poll(s, io::WRITE)
+    .onAny(lambda::bind(&internal::socket_send_data, s, data, length, request));
+  return future;
+}
+
+
+Future<size_t> Socket::Impl::sendFile(int fd, off_t offset, size_t length)
+{
+  CHECK(s > 0) << "SendFile requires an initialized socket.";
+
+  internal::SendFileRequest* request = new internal::SendFileRequest(fd, offset, length);
+
+  auto future = request->promise.future();
+
+  io::poll(s, io::WRITE)
+    .onAny(lambda::bind(&internal::socket_send_file, s, request));
+  return future;
+}
+
+
 SocketManager::SocketManager()
 {
   synchronizer(this) = SYNCHRONIZED_INITIALIZER_RECURSIVE;
@@ -1667,27 +1797,79 @@ PID<HttpProxy> SocketManager::proxy(const Socket& socket)
 }
 
 
+namespace internal {
+
+void _send_encoder(const Future<size_t>& result, Socket &socket, Encoder* encoder, size_t size);
+
+
+void send_encoder(Encoder* encoder, Socket& socket)
+{
+  switch (encoder->getKind()) {
+    case Encoder::data: {
+      size_t size;
+      const char* data = reinterpret_cast<DataEncoder*>(encoder)->next(&size);
+      socket.send(data, size).onAny(lambda::bind(&internal::_send_encoder, lambda::_1, socket, encoder, size));
+      break;
+    }
+    case Encoder::file: {
+      off_t offset;
+      size_t size;
+      int fd = reinterpret_cast<FileEncoder*>(encoder)->next(&offset, &size);
+      socket.sendFile(fd, offset, size).onAny(lambda::bind(&internal::_send_encoder, lambda::_1, socket, encoder, size));
+      break;
+    }
+  }
+}
+
+
+void _send_encoder(const Future<size_t>& result, Socket &socket, Encoder* encoder, size_t size)
+{
+  if (result.isFailed()) {
+    socket_manager->close(socket);
+    delete encoder;
+  } else {
+    size_t length = result.get();
+    // Update the encoder with the amount sent.
+    encoder->backup(size - length);
+
+    // See if there is any more of the message to send.
+    if (encoder->remaining() == 0) {
+      delete encoder;
+
+      // Check for more stuff to send on socket.
+      Encoder* next = socket_manager->next(socket);
+      if (next != NULL) {
+        send_encoder(next, socket);
+      }
+    } else {
+      send_encoder(encoder, socket);
+    }
+  }
+}
+
+} // namespace internal {
+
+
 void SocketManager::send(Encoder* encoder, bool persist)
 {
   CHECK(encoder != NULL);
 
   synchronized (this) {
-    if (sockets.count(encoder->socket()) > 0) {
+    Socket socket = encoder->socket();
+    if (sockets.count(socket) > 0) {
       // Update whether or not this socket should get disposed after
       // there is no more data to send.
       if (!persist) {
-        dispose.insert(encoder->socket());
+        dispose.insert(socket);
       }
 
-      if (outgoing.count(encoder->socket()) > 0) {
-        outgoing[encoder->socket()].push(encoder);
+      if (outgoing.count(socket) > 0) {
+        outgoing[socket].push(encoder);
       } else {
         // Initialize the outgoing queue.
-        outgoing[encoder->socket()];
+        outgoing[socket];
 
-        // Start polling in order to send with this encoder.
-        io::poll(encoder->socket(), io::WRITE)
-          .onAny(lambda::bind(encoder->sender(), encoder));
+        internal::send_encoder(encoder, socket);
       }
     } else {
       VLOG(1) << "Attempting to send on a no longer valid socket!";
