@@ -307,29 +307,29 @@ void accept(Accept* _accept)
   sockaddr_in addr;
   socklen_t addrlen = sizeof(addr);
 
-  int s = ::accept(_accept->fd, (sockaddr*) &addr, &addrlen);
+  int clientSocket = ::accept(_accept->fd, (sockaddr*) &addr, &addrlen);
 
-  if (s < 0) {
+  if (clientSocket < 0) {
     _accept->promise.fail("Failed to accept");
     delete _accept;
     return;
   }
 
-  Try<Nothing> nonblock = os::nonblock(s);
+  Try<Nothing> nonblock = os::nonblock(clientSocket);
   if (nonblock.isError()) {
     LOG_IF(INFO, VLOG_IS_ON(1)) << "Failed to accept, nonblock: "
                                 << nonblock.error();
-    os::close(s);
+    os::close(clientSocket);
     _accept->promise.fail("Failed to accept, nonblock: " + nonblock.error());
     delete _accept;
     return;
   }
 
-  Try<Nothing> cloexec = os::cloexec(s);
+  Try<Nothing> cloexec = os::cloexec(clientSocket);
   if (cloexec.isError()) {
     LOG_IF(INFO, VLOG_IS_ON(1)) << "Failed to accept, cloexec: "
                                 << cloexec.error();
-    os::close(s);
+    os::close(clientSocket);
     _accept->promise.fail("Failed to accept, cloexec: " + cloexec.error());
     delete _accept;
     return;
@@ -337,15 +337,15 @@ void accept(Accept* _accept)
 
   // Turn off Nagle (TCP_NODELAY) so pipelined requests don't wait.
   int on = 1;
-  if (setsockopt(s, SOL_TCP, TCP_NODELAY, &on, sizeof(on)) < 0) {
+  if (setsockopt(clientSocket, SOL_TCP, TCP_NODELAY, &on, sizeof(on)) < 0) {
     const char* error = strerror(errno);
     VLOG(1) << "Failed to turn off the Nagle algorithm: " << error;
-    os::close(s);
+    os::close(clientSocket);
     _accept->promise.fail(
       "Failed to turn off the Nagle algorithm: " + stringify(error));
     delete _accept;
   } else {
-    _accept->promise.set(Socket(s));
+    _accept->promise.set(Socket(clientSocket));
     delete _accept;
   }
 }
