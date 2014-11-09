@@ -8,6 +8,45 @@
 
 namespace process {
 
+class PollImpl : public Socket::Impl
+{
+public:
+  PollImpl(int _s) : Socket::Impl(_s) {}
+
+  virtual ~PollImpl() {}
+
+  virtual Future<Socket> connect(const Node& node);
+
+  virtual Future<size_t> read(char* data, size_t length);
+
+  virtual Future<size_t> send(const char* data, size_t length);
+
+  virtual Future<size_t> sendFile(int fd, off_t offset, size_t length);
+
+  virtual Try<Node> bind(const Node& node);
+
+  virtual Try<Nothing> listen(int backlog);
+
+  virtual Future<Socket> accept();
+};
+
+
+Socket::Socket(int _s) : impl(std::make_shared<PollImpl>(_s)) {}
+
+
+std::shared_ptr<Socket::Impl> Socket::create()
+{
+  Try<int> fd = process::socket(
+      AF_INET,
+      SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
+      0);
+  if (fd.isError()) {
+    ABORT("Failed to create socket: " + fd.error());
+  }
+  return std::make_shared<PollImpl>(fd.get());
+}
+
+
 namespace internal {
 
 struct Connect
@@ -36,7 +75,7 @@ void connect(const Socket& socket, Connect* _connect)
 } // namespace internal {
 
 
-Future<Socket> Socket::Impl::connect(const Node& node)
+Future<Socket> PollImpl::connect(const Node& node)
 {
   CHECK(s > 0) << "Connect requires an initialized socket.";
 
@@ -58,16 +97,16 @@ Future<Socket> Socket::Impl::connect(const Node& node)
     io::poll(s, io::WRITE)
       .onAny(lambda::bind(
                  &internal::connect,
-                 Socket(shared_from_this()),
+                 socket(),
                  connect));
 
     return result;
   }
-  return Socket(shared_from_this());
+  return socket();
 }
 
 
-Future<size_t> Socket::Impl::read(char* data, size_t length)
+Future<size_t> PollImpl::read(char* data, size_t length)
 {
   CHECK(s > 0) << "Read requires an initialized socket.";
 
@@ -188,7 +227,7 @@ void socket_send_file(int s, SendFileRequest* request)
 } // namespace internal {
 
 
-Future<size_t> Socket::Impl::send(const char* data, size_t length)
+Future<size_t> PollImpl::send(const char* data, size_t length)
 {
   CHECK(s > 0) << "Send requires an initialized socket.";
 
@@ -202,7 +241,7 @@ Future<size_t> Socket::Impl::send(const char* data, size_t length)
 }
 
 
-Future<size_t> Socket::Impl::sendFile(int fd, off_t offset, size_t length)
+Future<size_t> PollImpl::sendFile(int fd, off_t offset, size_t length)
 {
   CHECK(s > 0) << "SendFile requires an initialized socket.";
 
@@ -217,7 +256,7 @@ Future<size_t> Socket::Impl::sendFile(int fd, off_t offset, size_t length)
 }
 
 
-Try<Node> Socket::Impl::bind(const Node& node)
+Try<Node> PollImpl::bind(const Node& node)
 {
   CHECK(s > 0) << "Bind requires an initialized socket.";
 
@@ -242,7 +281,7 @@ Try<Node> Socket::Impl::bind(const Node& node)
 }
 
 
-Try<Nothing> Socket::Impl::listen(int backlog)
+Try<Nothing> PollImpl::listen(int backlog)
 {
   CHECK(s > 0) << "Listen requires an initialized socket.";
 
@@ -314,7 +353,7 @@ void accept(Accept* _accept)
 } // namespace internal {
 
 
-Future<Socket> Socket::Impl::accept()
+Future<Socket> PollImpl::accept()
 {
   CHECK(s > 0) << "Accept requires an initialized socket.";
 

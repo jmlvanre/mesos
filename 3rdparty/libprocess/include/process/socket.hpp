@@ -49,9 +49,8 @@ public:
   class Impl : public std::enable_shared_from_this<Impl>
   {
   public:
-    Impl(int _s) : s(_s) {}
 
-    ~Impl()
+    virtual ~Impl()
     {
       if (s >= 0) {
         Try<Nothing> close = os::close(s);
@@ -66,27 +65,34 @@ public:
       return s;
     }
 
-    Future<Socket> connect(const Node& node);
+    virtual Future<Socket> connect(const Node& node) = 0;
 
-    Future<size_t> read(char* data, size_t length);
+    virtual Future<size_t> read(char* data, size_t length) = 0;
 
-    Future<size_t> send(const char* data, size_t length);
+    virtual Future<size_t> send(const char* data, size_t length) = 0;
 
-    Future<size_t> sendFile(int fd, off_t offset, size_t length);
+    virtual Future<size_t> sendFile(int fd, off_t offset, size_t length) = 0;
 
-    Try<Node> bind(const Node& node);
+    virtual Try<Node> bind(const Node& node) = 0;
 
-    Try<Nothing> listen(int backlog);
+    virtual Try<Nothing> listen(int backlog) = 0;
 
-    Future<Socket> accept();
+    virtual Future<Socket> accept() = 0;
 
-  private:
+  protected:
+    Impl(int _s) : s(_s) {}
+
+    Socket socket()
+    {
+      return Socket(shared_from_this());
+    }
+
     int s;
   };
 
   Socket() {}
 
-  explicit Socket(int _s) : impl(std::make_shared<Impl>(_s)) {}
+  explicit Socket(int _s);
 
   bool operator == (const Socket& that) const
   {
@@ -141,17 +147,7 @@ private:
     return impl ? impl : (impl = create());
   }
 
-  static std::shared_ptr<Impl> create()
-  {
-    Try<int> fd = process::socket(
-        AF_INET,
-        SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
-        0);
-    if (fd.isError()) {
-      ABORT("Failed to create socket: " + fd.error());
-    }
-    return std::make_shared<Impl>(fd.get());
-  }
+  static std::shared_ptr<Impl> create();
 
   mutable std::shared_ptr<Impl> impl;
 };
