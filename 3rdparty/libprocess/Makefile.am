@@ -30,7 +30,6 @@ PICOJSON = 3rdparty/picojson-$(PICOJSON_VERSION)
 noinst_LTLIBRARIES = libprocess.la
 
 libprocess_la_SOURCES =		\
-  src/clock.cpp			\
   src/config.hpp		\
   src/decoder.hpp		\
   src/encoder.hpp		\
@@ -41,6 +40,7 @@ libprocess_la_SOURCES =		\
   src/latch.cpp			\
   src/libev.hpp			\
   src/libev.cpp			\
+  src/libev_clock.cpp		\
   src/libev_poll.cpp		\
   src/metrics/metrics.cpp	\
   src/pid.cpp			\
