@@ -70,6 +70,8 @@ public:
 
     Future<Socket> connect(const Node& node);
 
+    Future<size_t> read(char* data, size_t length);
+
   private:
     const Impl& get() const
     {
@@ -109,6 +111,11 @@ public:
   Future<Socket> connect(const Node& node)
   {
     return impl->connect(node);
+  }
+
+  Future<size_t> read(char* data, size_t length)
+  {
+    return impl->read(data, length);
   }
 
 private:
