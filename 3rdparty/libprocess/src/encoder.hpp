@@ -37,10 +37,17 @@ typedef void (*Sender)(Encoder*);
 class Encoder
 {
 public:
+  enum kind {
+    data,
+    file
+  };
+
   explicit Encoder(const Socket& _s) : s(_s) {}
   virtual ~Encoder() {}
 
   virtual Sender sender() = 0;
+
+  virtual kind getKind() const = 0;
 
   Socket socket() const
   {
@@ -63,6 +70,11 @@ public:
   virtual Sender sender()
   {
     return send_data;
+  }
+
+  virtual kind getKind() const
+  {
+    return Encoder::data;
   }
 
   virtual const char* next(size_t* length)
@@ -241,6 +253,11 @@ public:
   virtual Sender sender()
   {
     return send_file;
+  }
+
+  virtual kind getKind() const
+  {
+    return Encoder::file;
   }
 
   virtual int next(off_t* offset, size_t* length)
