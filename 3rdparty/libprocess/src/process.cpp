@@ -1644,9 +1644,18 @@ void ignore_read_data(const Socket &socket)
 
 namespace internal {
 
+// Forward declaration.
+void send_encoder(Encoder* encoder, const Socket& socket);
+
 Future<Socket> link_connect_success(const Socket& socket)
 {
   ignore_read_data(socket);
+
+  Encoder* encoder = socket_manager->next(socket);
+  if (encoder) {
+    send_encoder(encoder, socket);
+  }
+
   return socket;
 }
 
@@ -1682,6 +1691,10 @@ void SocketManager::link(ProcessBase* process, const UPID& to)
       nodes[s] = to.node;
 
       persists[to.node] = s;
+
+      // initialize outgoing to prevent a race with send while the
+      // socket is not yet connected.
+      outgoing[s];
 
       socket.connect(to.node)
         .then(lambda::bind(&internal::link_connect_success, lambda::_1))
