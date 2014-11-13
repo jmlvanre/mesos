@@ -118,8 +118,6 @@ Future<short> poll(int fd, short events)
 
 Future<short> poll(int fd, short events)
 {
-  process::initialize();
-
   // TODO(benh): Check if the file descriptor is non-blocking?
 
   return run_in_event_loop<short>(lambda::bind(&internal::poll, fd, events));

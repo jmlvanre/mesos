@@ -76,6 +76,12 @@ public:
 
     Future<size_t> sendFile(int fd, off_t offset, size_t length);
 
+    Try<Node> bind(const Node& node);
+
+    Try<Nothing> listen(int backlog);
+
+    Future<Socket> accept();
+
   private:
     const Impl& get() const
     {
@@ -130,6 +136,21 @@ public:
   Future<size_t> sendFile(int fd, off_t offset, size_t length) const
   {
     return impl->sendFile(fd, offset, length);
+  }
+
+  Try<Node> bind(const Node& node)
+  {
+    return impl->bind(node);
+  }
+
+  Try<Nothing> listen(int backlog)
+  {
+    return impl->listen(backlog);
+  }
+
+  Future<Socket> accept()
+  {
+    return impl->accept();
   }
 
 private:

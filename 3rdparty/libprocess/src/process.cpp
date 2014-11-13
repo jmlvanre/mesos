@@ -267,7 +267,7 @@ public:
   SocketManager();
   ~SocketManager();
 
-  Socket accepted(int s);
+  void accepted(const Socket& socket);
 
   void link(ProcessBase* process, const UPID& to);
 
@@ -434,7 +434,7 @@ const string Profiler::STOP_HELP = HELP(
 static uint32_t __id__ = 0;
 
 // Local server socket.
-static int __s__ = -1;
+static Socket __s__;
 
 // Local node.
 static Node __node__;
@@ -649,69 +649,6 @@ size_t decode_read_ready(
 } // namespace internal {
 
 
-void accept(struct ev_loop* loop, ev_io* watcher, int revents)
-{
-  CHECK_EQ(__s__, watcher->fd);
-
-  sockaddr_in addr;
-  socklen_t addrlen = sizeof(addr);
-
-  int s = ::accept(__s__, (sockaddr*) &addr, &addrlen);
-
-  if (s < 0) {
-    return;
-  }
-
-  Try<Nothing> nonblock = os::nonblock(s);
-  if (nonblock.isError()) {
-    LOG_IF(INFO, VLOG_IS_ON(1)) << "Failed to accept, nonblock: "
-                                << nonblock.error();
-    os::close(s);
-    return;
-  }
-
-  Try<Nothing> cloexec = os::cloexec(s);
-  if (cloexec.isError()) {
-    LOG_IF(INFO, VLOG_IS_ON(1)) << "Failed to accept, cloexec: "
-                                << cloexec.error();
-    os::close(s);
-    return;
-  }
-
-  // Turn off Nagle (TCP_NODELAY) so pipelined requests don't wait.
-  int on = 1;
-  if (setsockopt(s, SOL_TCP, TCP_NODELAY, &on, sizeof(on)) < 0) {
-    const char* error = strerror(errno);
-    VLOG(1) << "Failed to turn off the Nagle algorithm: " << error;
-    os::close(s);
-  } else {
-    // Inform the socket manager for proper bookkeeping.
-    Socket socket = socket_manager->accepted(s);
-
-    const size_t bufferSize = 80 * 1024;
-    char* buffer = new char[bufferSize];
-    memset(buffer, 0, bufferSize);
-
-    DataDecoder* decoder = new DataDecoder(socket);
-
-    socket.read(buffer, bufferSize)
-      .then(lambda::bind(
-          &internal::decode_read_ready,
-          lambda::_1,
-          buffer,
-          bufferSize,
-          socket,
-          decoder))
-      .onFailed(lambda::bind(
-          &internal::decode_read_failed,
-          lambda::_1,
-          buffer,
-          socket,
-          decoder));
-  }
-}
-
-
 void* serve(void* arg)
 {
   ev_loop(((struct ev_loop*) arg), 0);
@@ -775,6 +712,43 @@ void timedout(list<Timer>&& timers)
 //   sigaction(signal, &sa, NULL);
 //   raise(signal);
 // }
+
+
+namespace internal {
+
+void on_accept(const Future<Socket>& result, Socket& serverSocket)
+{
+  if (result.isReady()) {
+    Socket socket = result.get();
+    // Inform the socket manager for proper bookkeeping.
+    socket_manager->accepted(socket);
+
+    const size_t bufferSize = 80 * 1024;
+    char* buffer = new char[bufferSize];
+    memset(buffer, 0, bufferSize);
+
+    DataDecoder* decoder = new DataDecoder(socket);
+
+    socket.read(buffer, bufferSize)
+      .then(lambda::bind(
+          &internal::decode_read_ready,
+          lambda::_1,
+          buffer,
+          bufferSize,
+          socket,
+          decoder))
+      .onFailed(lambda::bind(
+          &internal::decode_read_failed,
+          lambda::_1,
+          buffer,
+          socket,
+          decoder));
+  }
+  serverSocket.accept()
+    .onAny(lambda::bind(&on_accept, lambda::_1, serverSocket));
+}
+
+} // namespace internal {
 
 
 void initialize(const string& delegate)
@@ -877,48 +851,20 @@ void initialize(const string& delegate)
     __node__.port = result;
   }
 
-  // Create a "server" socket for communicating with other nodes.
-  if ((__s__ = ::socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-    PLOG(FATAL) << "Failed to initialize, socket";
-  }
-
-  // Make socket non-blocking.
-  Try<Nothing> nonblock = os::nonblock(__s__);
-  if (nonblock.isError()) {
-    LOG(FATAL) << "Failed to initialize, nonblock: " << nonblock.error();
-  }
-
-  // Set FD_CLOEXEC flag.
-  Try<Nothing> cloexec = os::cloexec(__s__);
-  if (cloexec.isError()) {
-    LOG(FATAL) << "Failed to initialize, cloexec: " << cloexec.error();
-  }
+  Socket serverSocket;
 
   // Allow address reuse.
   int on = 1;
-  if (setsockopt(__s__, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) < 0) {
+  if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) < 0) {
     PLOG(FATAL) << "Failed to initialize, setsockopt(SO_REUSEADDR)";
   }
 
-  // Set up socket.
-  sockaddr_in addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family = PF_INET;
-  addr.sin_addr.s_addr = __node__.ip;
-  addr.sin_port = htons(__node__.port);
-
-  if (bind(__s__, (sockaddr*) &addr, sizeof(addr)) < 0) {
-    PLOG(FATAL) << "Failed to initialize, bind " << __node__;
+  auto bindResult = serverSocket.bind(__node__);
+  if (bindResult.isError()) {
+    PLOG(FATAL) << "Failed to initialize: " << bindResult.error();
   }
 
-  // Lookup and store assigned ip and assigned port.
-  socklen_t addrlen = sizeof(addr);
-  if (getsockname(__s__, (sockaddr*) &addr, &addrlen) < 0) {
-    PLOG(FATAL) << "Failed to initialize, getsockname";
-  }
-
-  __node__.ip = addr.sin_addr.s_addr;
-  __node__.port = ntohs(addr.sin_port);
+  __node__ = bindResult.get();
 
   // Lookup hostname if missing ip or if ip is 127.0.0.1 in case we
   // actually have a valid external ip address. Note that we need only
@@ -943,9 +889,11 @@ void initialize(const string& delegate)
     __node__.ip = *((uint32_t *) he->h_addr_list[0]);
   }
 
-  if (listen(__s__, 500000) < 0) {
-    PLOG(FATAL) << "Failed to initialize, listen";
+  auto listenResult = serverSocket.listen(500000);
+  if (listenResult.isError()) {
+    PLOG(FATAL) << "Failed to initialize: " << listenResult.error();
   }
+  __s__ = serverSocket;
 
   // Initialize libev.
   //
@@ -962,8 +910,8 @@ void initialize(const string& delegate)
   ev_async_init(&async_watcher, handle_async);
   ev_async_start(loop, &async_watcher);
 
-  ev_io_init(&server_watcher, accept, __s__, EV_READ);
-  ev_io_start(loop, &server_watcher);
+  serverSocket.accept()
+    .onAny(lambda::bind(&internal::on_accept, lambda::_1, serverSocket));
 
   Clock::initialize(lambda::bind(&timedout, lambda::_1));
 
@@ -1513,6 +1461,120 @@ Future<size_t> Socket::Impl::sendFile(int fd, off_t offset, size_t length)
 }
 
 
+Try<Node> Socket::Impl::bind(const Node& node)
+{
+  get();
+
+  sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = PF_INET;
+  addr.sin_addr.s_addr = node.ip;
+  addr.sin_port = htons(node.port);
+
+  if (::bind(s, (sockaddr*) &addr, sizeof(addr)) < 0) {
+    return Error("Failed to bind: " + stringify(inet_ntoa(addr.sin_addr)) +
+      ":" + stringify(node.port));
+  }
+
+  // Lookup and store assigned ip and assigned port.
+  socklen_t addrlen = sizeof(addr);
+  if (getsockname(s, (sockaddr*) &addr, &addrlen) < 0) {
+    return Error("Failed to bind, getsockname");
+  }
+
+  return Node(addr.sin_addr.s_addr, ntohs(addr.sin_port));
+}
+
+
+Try<Nothing> Socket::Impl::listen(int backlog)
+{
+  get();
+
+  if (::listen(s, backlog) < 0) {
+    return ErrnoError();
+  }
+  return Nothing();
+}
+
+
+namespace internal {
+
+struct Accept
+{
+  Accept(int _fd) : fd(_fd) {}
+  int fd;
+  Promise<Socket> promise;
+};
+
+
+void accept(Accept* _accept)
+{
+  sockaddr_in addr;
+  socklen_t addrlen = sizeof(addr);
+
+  int s = ::accept(_accept->fd, (sockaddr*) &addr, &addrlen);
+
+  if (s < 0) {
+    _accept->promise.fail("Failed to accept");
+    delete _accept;
+    return;
+  }
+
+  Try<Nothing> nonblock = os::nonblock(s);
+  if (nonblock.isError()) {
+    LOG_IF(INFO, VLOG_IS_ON(1)) << "Failed to accept, nonblock: "
+                                << nonblock.error();
+    os::close(s);
+    _accept->promise.fail("Failed to accept, nonblock: " + nonblock.error());
+    delete _accept;
+    return;
+  }
+
+  Try<Nothing> cloexec = os::cloexec(s);
+  if (cloexec.isError()) {
+    LOG_IF(INFO, VLOG_IS_ON(1)) << "Failed to accept, cloexec: "
+                                << cloexec.error();
+    os::close(s);
+    _accept->promise.fail("Failed to accept, cloexec: " + cloexec.error());
+    delete _accept;
+    return;
+  }
+
+  // Turn off Nagle (TCP_NODELAY) so pipelined requests don't wait.
+  int on = 1;
+  if (setsockopt(s, SOL_TCP, TCP_NODELAY, &on, sizeof(on)) < 0) {
+    const char* error = strerror(errno);
+    VLOG(1) << "Failed to turn off the Nagle algorithm: " << error;
+    os::close(s);
+    _accept->promise.fail(
+      "Failed to turn off the Nagle algorithm: " + stringify(error));
+    delete _accept;
+  } else {
+    _accept->promise.set(Socket(s));
+    delete _accept;
+  }
+}
+
+} // namespace internal {
+
+
+Future<Socket> Socket::Impl::accept()
+{
+  get();
+
+  internal::Accept* accept =
+    new internal::Accept(s);
+
+  auto future = accept->promise.future();
+
+  io::poll(s, io::READ)
+      .onAny(lambda::bind(
+                 &internal::accept,
+                 accept));
+  return future;
+}
+
+
 SocketManager::SocketManager()
 {
   synchronizer(this) = SYNCHRONIZED_INITIALIZER_RECURSIVE;
@@ -1522,13 +1584,11 @@ SocketManager::SocketManager()
 SocketManager::~SocketManager() {}
 
 
-Socket SocketManager::accepted(int s)
+void SocketManager::accepted(const Socket& socket)
 {
   synchronized (this) {
-    return sockets[s] = Socket(s);
+    sockets[socket] = socket;
   }
-
-  UNREACHABLE();
 }
 
 
