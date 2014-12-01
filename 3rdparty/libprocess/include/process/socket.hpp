@@ -110,8 +110,8 @@ class Socket
 {
 public:
   enum Kind {
-    POLL
-    // TODO(jmlvanre): add libevent socket.
+    POLL,
+    LIBEVENT
   };
 
   // Each socket is a reference counted, shared by default, concurrent
@@ -122,9 +122,7 @@ public:
   class Impl : public std::enable_shared_from_this<Impl>
   {
   public:
-    explicit Impl(int _s) : s(_s) { CHECK(s >= 0); }
-
-    ~Impl()
+    virtual ~Impl()
     {
       CHECK(s >= 0);
       Try<Nothing> close = os::close(s);
@@ -139,21 +137,28 @@ public:
       return s;
     }
 
-    Future<Nothing> connect(const Node& node);
-
-    Future<size_t> recv(char* data, size_t size);
-
-    Future<size_t> send(const char* data, size_t size);
-
-    Future<size_t> sendfile(int fd, off_t offset, size_t size);
-
     Try<Node> bind(const Node& node);
 
-    Try<Nothing> listen(int backlog);
+    // The interface that must be implemented by a Socket
+    // implementation.
+    virtual Future<Nothing> connect(const Node& node) = 0;
 
-    Future<Socket> accept();
+    virtual Future<size_t> recv(char* data, size_t size) = 0;
 
-  private:
+    virtual Future<size_t> send(const char* data, size_t size) = 0;
+
+    virtual Future<size_t> sendfile(int fd, off_t offset, size_t size) = 0;
+
+    virtual Try<Nothing> listen(int backlog) = 0;
+
+    virtual Future<Socket> accept() = 0;
+
+  protected:
+    explicit Impl(int _s) : s(_s) { CHECK(s >= 0); }
+
+    // Construct a Socket wrapper from this implementation.
+    Socket socket() { return Socket(shared_from_this()); }
+
     int s;
   };
 
@@ -213,6 +218,8 @@ public:
 
 private:
   explicit Socket(std::shared_ptr<Impl>&& that) : impl(std::move(that)) {}
+
+  explicit Socket(const std::shared_ptr<Impl>& that) : impl(that) {}
 
   std::shared_ptr<Impl> impl;
 };
