@@ -10,6 +10,29 @@ using std::string;
 namespace process {
 namespace network {
 
+class PollSocketImpl : public Socket::Impl
+{
+public:
+  PollSocketImpl(int s) : Socket::Impl(s) {}
+
+  virtual ~PollSocketImpl() {}
+
+  // Implementation of the Socket::Impl interface
+  virtual Future<Nothing> connect(const Node& node);
+  virtual Future<size_t> recv(char* data, size_t size);
+  virtual Future<size_t> send(const char* data, size_t size);
+  virtual Future<size_t> sendfile(int fd, off_t offset, size_t size);
+  virtual Try<Nothing> listen(int backlog);
+  virtual Future<Socket> accept();
+};
+
+
+Try<std::shared_ptr<Socket::Impl>> pollSocket(int s)
+{
+  return std::make_shared<PollSocketImpl>(s);
+}
+
+
 namespace internal {
 
 Future<Nothing> connect(const Socket& socket)
@@ -31,13 +54,13 @@ Future<Nothing> connect(const Socket& socket)
 } // namespace internal {
 
 
-Future<Nothing> Socket::Impl::connect(const Node& node)
+Future<Nothing> PollSocketImpl::connect(const Node& node)
 {
   Try<int> connect = network::connect(get(), node);
   if (connect.isError()) {
     if (errno == EINPROGRESS) {
       return io::poll(get(), io::WRITE)
-        .then(lambda::bind(&internal::connect, Socket(shared_from_this())));
+        .then(lambda::bind(&internal::connect, socket()));
     }
 
     return Failure(connect.error());
@@ -47,7 +70,7 @@ Future<Nothing> Socket::Impl::connect(const Node& node)
 }
 
 
-Future<size_t> Socket::Impl::recv(char* data, size_t size)
+Future<size_t> PollSocketImpl::recv(char* data, size_t size)
 {
   return io::read(get(), data, size);
 }
@@ -129,33 +152,21 @@ Future<size_t> socket_send_file(int s, int fd, off_t offset, size_t size)
 } // namespace internal {
 
 
-Future<size_t> Socket::Impl::send(const char* data, size_t size)
+Future<size_t> PollSocketImpl::send(const char* data, size_t size)
 {
   return io::poll(get(), io::WRITE)
     .then(lambda::bind(&internal::socket_send_data, get(), data, size));
 }
 
 
-Future<size_t> Socket::Impl::sendfile(int fd, off_t offset, size_t size)
+Future<size_t> PollSocketImpl::sendfile(int fd, off_t offset, size_t size)
 {
   return io::poll(get(), io::WRITE)
     .then(lambda::bind(&internal::socket_send_file, get(), fd, offset, size));
 }
 
 
-Try<Node> Socket::Impl::bind(const Node& node)
-{
-  Try<int> bind = network::bind(get(), node);
-  if (bind.isError()) {
-    return Error(bind.error());
-  }
-
-  // Lookup and store assigned ip and assigned port.
-  return network::getsockname(get(), AF_INET);
-}
-
-
-Try<Nothing> Socket::Impl::listen(int backlog)
+Try<Nothing> PollSocketImpl::listen(int backlog)
 {
   if (::listen(get(), backlog) < 0) {
     return ErrnoError();
@@ -210,7 +221,7 @@ Future<Socket> accept(int fd)
 } // namespace internal {
 
 
-Future<Socket> Socket::Impl::accept()
+Future<Socket> PollSocketImpl::accept()
 {
   return io::poll(get(), io::READ)
     .then(lambda::bind(&internal::accept, get()));

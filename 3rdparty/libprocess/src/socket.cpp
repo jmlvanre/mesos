@@ -1,7 +1,25 @@
 #include <process/socket.hpp>
 
+using std::string;
+
 namespace process {
 namespace network {
+
+// Forward declaration.
+Try<std::shared_ptr<Socket::Impl>> pollSocket(int s);
+
+
+Try<Node> Socket::Impl::bind(const Node& node)
+{
+  Try<int> bind = network::bind(get(), node);
+  if (bind.isError()) {
+    return Error(bind.error());
+  }
+
+  // Lookup and store assigned ip and assigned port.
+  return network::getsockname(get(), AF_INET);
+}
+
 
 const Socket::Kind& Socket::DEFAULT_SOCKET_KIND()
 {
@@ -10,6 +28,7 @@ const Socket::Kind& Socket::DEFAULT_SOCKET_KIND()
   static Kind defaultKind = POLL;
   return defaultKind;
 }
+
 
 Try<Socket> Socket::create(Kind kind, int s)
 {
@@ -44,12 +63,28 @@ Try<Socket> Socket::create(Kind kind, int s)
 
   switch (kind) {
     case POLL: {
-      return Socket(std::make_shared<Socket::Impl>(s));
+      Try<std::shared_ptr<Socket::Impl>> socket = pollSocket(s);
+      if (socket.isError()) {
+        return Error(socket.error());
+      }
+      return Socket(socket.get());
     }
+#ifdef USE_LIBEVENT
+    case LIBEVENT: {
+      VLOG(1) << "LIBEVENT socket is not implemented yet. Falling back to poll";
+      Try<std::shared_ptr<Socket::Impl>> socket = pollSocket(s);
+      if (socket.isError()) {
+        return Error(socket.error());
+      }
+      return Socket(socket.get());
+    }
+#endif
     // By not setting a default we leverage the compiler errors when
     // the enumeration is augmented to find all the cases we need to
     // provide.
   }
+
+  return Error("Unreachable, all socket kinds should be in switch statement");
 }
 
 } // namespace network {
