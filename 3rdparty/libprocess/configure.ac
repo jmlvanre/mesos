@@ -76,6 +76,13 @@ AC_ARG_ENABLE([libevent],
                              [use libevent instead of libev default: no]),
               [enable_libevent=yes], [])
 
+AC_ARG_ENABLE([libevent_socket],
+              AS_HELP_STRING([--enable-libevent-socket],
+                             [use libevent socket instead of poll based socket
+                             default: no]),
+              [enable_libevent_socket=yes], [])
+
+
 AC_ARG_WITH([boost],
             AS_HELP_STRING([--with-boost@<:@=DIR@:>@],
                            [excludes building and using the bundled Boost
@@ -571,6 +578,9 @@ else
 fi
 
 AM_CONDITIONAL([ENABLE_LIBEVENT], [test x"$enable_libevent" = "xyes"])
+AM_CONDITIONAL([ENABLE_LIBEVENT_SOCKET],
+               [test x"$enable_libevent_socket" = "xyes" &&
+               test x"$enable_libevent" = "xyes"])
 
 if test "x$enable_libevent" = "xyes"; then
   AC_CHECK_HEADERS([event2/event.h],

@@ -51,6 +51,11 @@ libprocess_la_SOURCES =		\
   src/synchronized.hpp		\
   src/timeseries.cpp
 
+if ENABLE_LIBEVENT_SOCKET
+libprocess_la_SOURCES +=	\
+    src/libevent_socket.cpp
+endif
+
 libprocess_la_CPPFLAGS =		\
   -I$(srcdir)/include			\
   -I$(srcdir)/$(STOUT)/include		\
