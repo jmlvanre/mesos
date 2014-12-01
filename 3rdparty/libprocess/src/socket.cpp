@@ -5,8 +5,9 @@ using std::string;
 namespace process {
 namespace network {
 
-// Forward declaration.
+// Forward declarations.
 Try<std::shared_ptr<Socket::Impl>> pollSocket(int s);
+Try<std::shared_ptr<Socket::Impl>> libeventSocket(int s);
 
 
 Try<Node> Socket::Impl::bind(const Node& node)
@@ -69,10 +70,9 @@ Try<Socket> Socket::create(Kind kind, int s)
       }
       return Socket(socket.get());
     }
-#ifdef USE_LIBEVENT
+#ifdef USE_LIBEVENT_SOCKET
     case LIBEVENT: {
-      VLOG(1) << "LIBEVENT socket is not implemented yet. Falling back to poll";
-      Try<std::shared_ptr<Socket::Impl>> socket = pollSocket(s);
+      Try<std::shared_ptr<Socket::Impl>> socket = libeventSocket(s);
       if (socket.isError()) {
         return Error(socket.error());
       }

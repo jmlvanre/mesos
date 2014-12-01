@@ -616,6 +616,11 @@ libevent_pthreads is required for mesos to build.
   ])])
 fi
 
+if test "x$enable_libevent_socket" = "xyes" &&
+  test x"$enable_libevent" = "xyes"; then
+  AC_DEFINE([USE_LIBEVENT_SOCKET], [1])
+fi
+
 AS_IF([test "x${ac_cv_env_CFLAGS_set}" = "x"],
       [CFLAGS="$debug_flags $optimize_flags"])
 AS_IF([test "x${ac_cv_env_CXXFLAGS_set}" = "x"],
