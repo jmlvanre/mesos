@@ -8,6 +8,7 @@ namespace network {
 // Forward declarations.
 Try<std::shared_ptr<Socket::Impl>> pollSocket(int s);
 Try<std::shared_ptr<Socket::Impl>> libeventSocket(int s);
+Try<std::shared_ptr<Socket::Impl>> libeventSSLSocket(int s, void* arg);
 
 
 Try<Node> Socket::Impl::bind(const Node& node)
@@ -17,8 +18,24 @@ Try<Node> Socket::Impl::bind(const Node& node)
     return Error(bind.error());
   }
 
+  std::stringstream ss;
+  ss << network::getsockname(get(), AF_INET).get();
   // Lookup and store assigned ip and assigned port.
   return network::getsockname(get(), AF_INET);
+}
+
+
+Socket::Kind getDefaultSocketKind() {
+  const char* env = getenv("USE_SSL");
+  if (env != NULL && strcmp(env, "1") == 0) {
+    return Socket::SSL;
+  } else {
+#ifdef USE_LIBEVENT_SOCKET
+    return Socket::LIBEVENT;
+#else
+    return Socket::POLL;
+#endif
+  }
 }
 
 
@@ -26,12 +43,12 @@ const Socket::Kind& Socket::DEFAULT_SOCKET_KIND()
 {
   // TODO(jmlvanre): Change the default based on configure or
   // environment flags.
-  static Kind defaultKind = POLL;
+  static Kind defaultKind = getDefaultSocketKind();
   return defaultKind;
 }
 
 
-Try<Socket> Socket::create(Kind kind, int s)
+Try<Socket> Socket::create(Kind kind, int s, void* arg)
 {
   if (s < 0) {
     // Supported in Linux >= 2.6.27.
@@ -73,6 +90,15 @@ Try<Socket> Socket::create(Kind kind, int s)
 #ifdef USE_LIBEVENT_SOCKET
     case LIBEVENT: {
       Try<std::shared_ptr<Socket::Impl>> socket = libeventSocket(s);
+      if (socket.isError()) {
+        return Error(socket.error());
+      }
+      return Socket(socket.get());
+    }
+#endif
+#ifdef USE_SSL_SOCKET
+    case SSL: {
+      Try<std::shared_ptr<Socket::Impl>> socket = libeventSSLSocket(s, arg);
       if (socket.isError()) {
         return Error(socket.error());
       }
