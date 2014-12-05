@@ -14,9 +14,46 @@ namespace process {
 struct event_base* ev_base = NULL;
 
 
+struct event* async_event = NULL;
+struct timeval async_tv{3600, 0};
+static synchronizable(functions) = SYNCHRONIZED_INITIALIZER;
+std::queue<lambda::function<void (void)>> async_functions;
+__thread bool in_event_loop = false;
+
+void run_in_event_loop(const lambda::function<void (void)>& f)
+{
+  if (in_event_loop) {
+    f();
+  } else {
+    synchronized (functions) {
+      async_functions.push(f);
+      event_active(async_event, EV_TIMEOUT, 0);
+    }
+  }
+}
+
+
+void async_function(int sock, short which, void *arg)
+{
+  std::queue<lambda::function<void (void)>> q;
+  {
+    synchronized (functions) {
+      std::swap(q, async_functions);
+      evtimer_add(async_event, &async_tv);
+    }
+  }
+  while (!q.empty()) {
+    q.front()();
+    q.pop();
+  }
+}
+
+
 void* EventLoop::run(void*)
 {
+  in_event_loop = true;
   int result = event_base_loop(ev_base, 0);
+  in_event_loop = false;
   if (result < 0) {
     LOG(FATAL) << "Failed to run event loop";
   } else if (result == 1) {
@@ -59,7 +96,7 @@ void EventLoop::delay(const Duration& duration, void(*function)(void))
   if (duration > Seconds(0)) {
     tval = duration.timeval();
   }
-  
+
   evtimer_add(delay->timer, &tval);
 }
 
@@ -116,6 +153,9 @@ void EventLoop::initialize()
   // immediately. Here we add a dummy timer.
   internal::dummy_ev = evtimer_new(ev_base, internal::dummy_function, NULL);
   evtimer_add(internal::dummy_ev, &internal::dummy_tv);
+
+  async_event = evtimer_new(ev_base, async_function, NULL);
+  evtimer_add(async_event, &async_tv);
 }
 
 } // namespace process {

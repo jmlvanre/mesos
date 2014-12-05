@@ -56,6 +56,14 @@ libprocess_la_SOURCES +=	\
     src/libevent_socket.cpp
 endif
 
+EVENT_LIB =
+
+if ENABLE_SSL
+libprocess_la_SOURCES +=	\
+    src/libevent_ssl_socket.cpp
+EVENT_LIB += -levent_openssl -lssl -lcrypto
+endif
+
 libprocess_la_CPPFLAGS =		\
   -I$(srcdir)/include			\
   -I$(srcdir)/$(STOUT)/include		\
@@ -93,7 +101,7 @@ else
 endif
 
 if ENABLE_LIBEVENT
-  EVENT_LIB = -levent -levent_pthreads
+  EVENT_LIB += -levent -levent_pthreads
 else
 if WITH_BUNDLED_LIBEV
   EVENT_LIB = $(LIBEV)/libev.la

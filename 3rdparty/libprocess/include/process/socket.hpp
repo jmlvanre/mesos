@@ -111,7 +111,8 @@ class Socket
 public:
   enum Kind {
     POLL,
-    LIBEVENT
+    LIBEVENT,
+    SSL
   };
 
   // Each socket is a reference counted, shared by default, concurrent
@@ -152,6 +153,11 @@ public:
     virtual Try<Nothing> listen(int backlog) = 0;
 
     virtual Future<Socket> accept() = 0;
+
+    virtual void shutdown()
+    {
+      ::shutdown(s, SHUT_RD);
+    }
 
   protected:
     explicit Impl(int _s) : s(_s) { CHECK(s >= 0); }
@@ -212,7 +218,15 @@ public:
     return impl->accept();
   }
 
-  static Try<Socket> create(Kind kind = DEFAULT_SOCKET_KIND(), int s = -1);
+  void shutdown()
+  {
+    impl->shutdown();
+  }
+
+  static Try<Socket> create(
+      Kind kind = DEFAULT_SOCKET_KIND(),
+      int s = -1,
+      void* arg = NULL);
 
   static const Kind& DEFAULT_SOCKET_KIND();
 
