@@ -16,6 +16,7 @@
 
 #include <ctype.h> // For 'isdigit'.
 #include <limits.h> // For 'LLONG_(MAX|MIN)'
+#include <time.h> // For 'timeval'
 
 #include <iomanip>
 #include <iostream>
@@ -73,6 +74,11 @@ public:
 
   Duration() : nanos(0) {}
 
+  explicit Duration(const timeval& timeval)
+  {
+    nanos = timeval.tv_sec * SECONDS + timeval.tv_usec * MICROSECONDS;
+  }
+
   int64_t ns() const   { return nanos; }
   double us() const    { return static_cast<double>(nanos) / MICROSECONDS; }
   double ms() const    { return static_cast<double>(nanos) / MILLISECONDS; }
@@ -81,6 +87,13 @@ public:
   double hrs() const   { return static_cast<double>(nanos) / HOURS; }
   double days() const  { return static_cast<double>(nanos) / DAYS; }
   double weeks() const { return static_cast<double>(nanos) / WEEKS; }
+
+  struct timeval timeval() const
+  {
+    const long int seconds = secs();
+    const long int microseconds = us() - (seconds * MILLISECONDS);
+    return ::timeval{seconds, microseconds};
+  }
 
   bool operator <  (const Duration& d) const { return nanos <  d.nanos; }
   bool operator <= (const Duration& d) const { return nanos <= d.nanos; }
