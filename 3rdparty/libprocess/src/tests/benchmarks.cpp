@@ -88,7 +88,7 @@ public:
 
   void setLink(const UPID& that)
   {
-    //link(that);
+    link(that);
   }
 
   void start()

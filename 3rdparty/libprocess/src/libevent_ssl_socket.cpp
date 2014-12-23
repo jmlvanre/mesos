@@ -84,7 +84,7 @@ namespace network {
 class LibeventSSLSocketImpl : public Socket::Impl
 {
 public:
-  LibeventSSLSocketImpl(int _s, struct bufferevent* _bev);
+  LibeventSSLSocketImpl(int _s, void* _request);
 
   virtual ~LibeventSSLSocketImpl()
   {
@@ -92,6 +92,7 @@ public:
       SSL *ctx = bufferevent_openssl_get_ssl(bev);
       SSL_set_shutdown(ctx, SSL_RECEIVED_SHUTDOWN);
       SSL_shutdown(ctx);
+      bufferevent_disable(bev, EV_READ | EV_WRITE);
       bufferevent_free(bev);
       if (freeSSLCtx) {
         SSL_free(ctx);
@@ -139,11 +140,13 @@ private:
 
   struct AcceptRequest
   {
-    AcceptRequest(LibeventSSLSocketImpl* _impl) : impl(_impl) {}
-    LibeventSSLSocketImpl* impl;
+    LibeventSSLSocketImpl* self;
     Promise<Socket> promise;
     struct bufferevent* bev;
+    Socket* socket;
     int sock;
+    struct sockaddr* sa;
+    int sa_len;
   };
 
   void _recv(Socket* socket, size_t size);
@@ -165,8 +168,6 @@ private:
   void discardSend();
 
   void discardConnect();
-
-  static void acceptEventCb(struct bufferevent* bev, short events, void* arg);
 
   void doAccept(
     int sock,
@@ -565,9 +566,7 @@ Try<std::shared_ptr<Socket::Impl>> libeventSSLSocket(int s, void* arg)
     }
   }
 
-  return std::make_shared<LibeventSSLSocketImpl>(
-      s,
-      reinterpret_cast<struct bufferevent*>(arg));
+  return std::make_shared<LibeventSSLSocketImpl>(s, arg);
 }
 
 
@@ -652,6 +651,7 @@ void LibeventSSLSocketImpl::eventCb(
 {
   LibeventSSLSocketImpl* impl = reinterpret_cast<LibeventSSLSocketImpl*>(arg);
   assert(impl != NULL);
+
   if (events & BEV_EVENT_EOF) {
     if (impl->recvRequest) {
       RecvRequest* request = impl->recvRequest;
@@ -668,7 +668,12 @@ void LibeventSSLSocketImpl::eventCb(
       impl->connectRequest = NULL;
       internal::failRequest(request, "Failed connect: connection closed");
     }
-  } else if (events & BEV_EVENT_ERROR) {
+    if (impl->acceptRequest) {
+      AcceptRequest* request = impl->acceptRequest;
+      impl->acceptRequest = NULL;
+      internal::failRequest(request, "Failed accept: connection closed");
+    }
+  } else if (events & BEV_EVENT_ERROR && EVUTIL_SOCKET_ERROR() != 0) {
     VLOG(1) << "Socket error: "
             << stringify(evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
     if (impl->recvRequest) {
@@ -687,6 +692,12 @@ void LibeventSSLSocketImpl::eventCb(
       ConnectRequest* request = impl->connectRequest;
       impl->connectRequest = NULL;
       internal::failRequest(request, "Failed connect, connection error: " +
+          stringify(evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR())));
+    }
+    if (impl->acceptRequest) {
+      AcceptRequest* request = impl->acceptRequest;
+      impl->acceptRequest = NULL;
+      internal::failRequest(request, "Failed accept: connection error: " +
           stringify(evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR())));
     }
   } else if (events & BEV_EVENT_CONNECTED) {
@@ -716,26 +727,57 @@ void LibeventSSLSocketImpl::eventCb(
 
       internal::satisfyRequest(request, Nothing());
     }
+    if (impl->acceptRequest) {
+      AcceptRequest* request = impl->acceptRequest;
+      impl->acceptRequest = NULL;
+
+      // Do post verification of provided certificates.
+      if (shouldVerifyCertificate) {
+        SSL *ssl = bufferevent_openssl_get_ssl(bev);
+
+        Try<Nothing> verify = internal::postVerify(
+            ssl,
+            shouldRequireCertificate,
+            impl->peerHostname);
+        if (verify.isError()) {
+          VLOG(1) << "Failed accept, post verification error: " + verify.error();
+          delete request->socket;
+          internal::failRequest(request, verify.error());
+          return;
+        }
+      }
+
+      Socket* socket = request->socket;
+      internal::satisfyRequest(request, impl->socket());
+      delete socket;
+    }
   }
 }
 
 
-LibeventSSLSocketImpl::LibeventSSLSocketImpl(int _s, struct bufferevent* _bev)
+LibeventSSLSocketImpl::LibeventSSLSocketImpl(int _s, void* _request)
   : Socket::Impl(_s),
-    bev(_bev),
+    bev(NULL),
     listener(NULL),
     recvRequest(NULL),
     sendRequest(NULL),
     connectRequest(NULL),
     acceptRequest(NULL),
-    freeSSLCtx(_bev != NULL) {
-  if (bev) {
-    bufferevent_setcb(
-        bev,
-        LibeventSSLSocketImpl::recvCb,
-        LibeventSSLSocketImpl::sendCb,
-        LibeventSSLSocketImpl::eventCb,
-        this);
+    freeSSLCtx(false) {
+  if (_request != NULL) {
+    AcceptRequest* request = reinterpret_cast<AcceptRequest*>(_request);
+    bev = request->bev;
+    freeSSLCtx = bev != NULL;
+    acceptRequest = request;
+    Try<string> hostname =
+    net::getHostname(reinterpret_cast<sockaddr_in*>(request->sa)->sin_addr.s_addr);
+    if (hostname.isError()) {
+      VLOG(2) << "Could not determine hostname of peer";
+    } else {
+      VLOG(2) << "Accepting from " << hostname.get();
+      peerHostname = hostname.get();
+    }
+    request->self = this;
   }
 }
 
@@ -958,52 +1000,6 @@ Future<size_t> LibeventSSLSocketImpl::sendfile(
 }
 
 
-void LibeventSSLSocketImpl::acceptEventCb(
-    struct bufferevent* bev,
-    short events,
-    void* arg)
-{
-  AcceptRequest* request = reinterpret_cast<AcceptRequest*>(arg);
-  assert(request != NULL);
-
-  if (events & BEV_EVENT_CONNECTED) {
-    // Do post verification of provided certificates.
-    if (shouldVerifyCertificate) {
-      SSL *ssl = bufferevent_openssl_get_ssl(bev);
-
-      Try<Nothing> verify = internal::postVerify(
-          ssl,
-          shouldRequireCertificate,
-          request->impl->peerHostname);
-      if (verify.isError()) {
-        VLOG(1) << "Failed accept, post verification error: " + verify.error();
-        request->promise.fail(verify.error());
-        delete request;
-        return;
-      }
-    }
-
-    Try<Socket> socket =
-      Socket::create(Socket::SSL, request->sock, request->bev);
-
-    if (socket.isError()) {
-      request->promise.fail(socket.error());
-    } else {
-      request->promise.set(socket.get());
-    }
-  } else if (events & BEV_EVENT_ERROR) {
-    VLOG(1) << "Socket error: "
-            << stringify(evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
-    request->promise.fail("Error connecting accepted socket: " +
-        stringify(evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR())));
-  } else {
-    request->promise.fail("Error connecting accepted socket");
-  }
-
-  delete request;
-}
-
-
 void LibeventSSLSocketImpl::doAccept(
     int sock,
     struct sockaddr* sa,
@@ -1020,15 +1016,6 @@ void LibeventSSLSocketImpl::doAccept(
   }
 
   evconnlistener_disable(listener);
-
-  Try<string> hostname =
-    net::getHostname(reinterpret_cast<sockaddr_in*>(sa)->sin_addr.s_addr);
-  if (hostname.isError()) {
-    VLOG(2) << "Could not determine hostname of peer";
-  } else {
-    VLOG(2) << "Accepting from " << hostname.get();
-    peerHostname = hostname.get();
-  }
 
   struct event_base* ev_base = evconnlistener_get_base(listener);
 
@@ -1049,13 +1036,23 @@ void LibeventSSLSocketImpl::doAccept(
 
   request->bev = bev;
   request->sock = sock;
+  request->sa = sa;
+  request->sa_len = sa_len;
 
-  bufferevent_setcb(
-      bev,
-      NULL,
-      NULL,
-      LibeventSSLSocketImpl::acceptEventCb,
-      request);
+  Try<Socket> socket =
+      Socket::create(Socket::SSL, sock, request);
+  if (socket.isError()) {
+    request->promise.fail(socket.error());
+    delete request;
+  } else {
+    request->socket = new Socket(socket.get());
+    bufferevent_setcb(
+        bev,
+        LibeventSSLSocketImpl::recvCb,
+        LibeventSSLSocketImpl::sendCb,
+        LibeventSSLSocketImpl::eventCb,
+        request->self);
+  }
 }
 
 
@@ -1134,7 +1131,7 @@ Future<Socket> LibeventSSLSocketImpl::accept()
     return Failure("Socket is already accepting");
   }
 
-  acceptRequest = new AcceptRequest(this);
+  acceptRequest = new AcceptRequest();
   Future<Socket> future = acceptRequest->promise.future();
 
   // Copy this socket into 'run_in_event_loop' to keep the it alive.

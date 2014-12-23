@@ -52,13 +52,20 @@ void async_function(int sock, short which, void *arg)
 void* EventLoop::run(void*)
 {
   in_event_loop = true;
-  int result = event_base_loop(ev_base, 0);
+  do {
+    int result = event_base_loop(ev_base, EVLOOP_ONCE);
+    if (result < 0) {
+      LOG(FATAL) << "Failed to run event loop";
+    } else if (result == 1) {
+      VLOG(1) << "All events handled, continuing event loop";
+      continue;
+    } else if (event_base_got_break(ev_base)) {
+      break;
+    } else if (event_base_got_exit(ev_base)) {
+      break;
+    }
+  } while (true);
   in_event_loop = false;
-  if (result < 0) {
-    LOG(FATAL) << "Failed to run event loop";
-  } else if (result == 1) {
-    VLOG(1) << "Finished running event loop due to lack of events";
-  }
 
   return NULL;
 }
@@ -119,21 +126,6 @@ double EventLoop::time()
 }
 
 
-namespace internal {
-
-static event* dummy_ev;
-static timeval dummy_tv{3600, 0};
-
-// A dummy function for our dummy timer that keeps the event loop
-// from exiting early.
-void dummy_function(int, short, void* arg)
-{
-  evtimer_add(dummy_ev, &dummy_tv);
-}
-
-} // namespace internal {
-
-
 void EventLoop::initialize()
 {
   if (evthread_use_pthreads() < 0) {
@@ -148,11 +140,6 @@ void EventLoop::initialize()
   if (ev_base == NULL) {
     LOG(FATAL) << "Failed to initialize, event_base_new";
   }
-
-  // We need at least 1 event in the loop, otherwise it will exit
-  // immediately. Here we add a dummy timer.
-  internal::dummy_ev = evtimer_new(ev_base, internal::dummy_function, NULL);
-  evtimer_add(internal::dummy_ev, &internal::dummy_tv);
 
   async_event = evtimer_new(ev_base, async_function, NULL);
   evtimer_add(async_event, &async_tv);
