@@ -965,8 +965,8 @@ TEST_F(MasterTest, MasterInfo)
   driver.start();
 
   AWAIT_READY(masterInfo);
-  EXPECT_EQ(master.get().node.port, masterInfo.get().port());
-  EXPECT_EQ(master.get().node.ip, masterInfo.get().ip());
+  EXPECT_EQ(master.get().address.port, masterInfo.get().port());
+  EXPECT_EQ(master.get().address.ip, masterInfo.get().ip());
 
   driver.stop();
   driver.join();
@@ -1023,8 +1023,8 @@ TEST_F(MasterTest, MasterInfoOnReElection)
   AWAIT_READY(disconnected);
 
   AWAIT_READY(masterInfo);
-  EXPECT_EQ(master.get().node.port, masterInfo.get().port());
-  EXPECT_EQ(master.get().node.ip, masterInfo.get().ip());
+  EXPECT_EQ(master.get().address.port, masterInfo.get().port());
+  EXPECT_EQ(master.get().address.ip, masterInfo.get().ip());
 
   // The re-registered framework should get offers.
   AWAIT_READY(resourceOffers2);
@@ -2139,8 +2139,8 @@ TEST_F(MasterTest, MaxExecutorsPerSlave)
   driver.start();
 
   AWAIT_READY(masterInfo);
-  EXPECT_EQ(master.get().node.port, masterInfo.get().port());
-  EXPECT_EQ(master.get().node.ip, masterInfo.get().ip());
+  EXPECT_EQ(master.get().address.port, masterInfo.get().port());
+  EXPECT_EQ(master.get().address.ip, masterInfo.get().ip());
 
   driver.stop();
   driver.join();
