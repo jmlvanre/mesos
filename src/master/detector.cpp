@@ -166,7 +166,7 @@ class ZooKeeperMasterDetectorProcess
   : public Process<ZooKeeperMasterDetectorProcess>
 {
 public:
-  explicit ZooKeeperMasterDetectorProcess(const URL& url);
+  explicit ZooKeeperMasterDetectorProcess(const zookeeper::URL& url);
   explicit ZooKeeperMasterDetectorProcess(Owned<Group> group);
   ~ZooKeeperMasterDetectorProcess();
 
@@ -201,7 +201,7 @@ Try<MasterDetector*> MasterDetector::create(const string& master)
   if (master == "") {
     return new StandaloneMasterDetector();
   } else if (master.find("zk://") == 0) {
-    Try<URL> url = URL::parse(master);
+    Try<zookeeper::URL> url = zookeeper::URL::parse(master);
     if (url.isError()) {
       return Error(url.error());
     }
@@ -291,7 +291,7 @@ Future<Option<MasterInfo> > StandaloneMasterDetector::detect(
 // TODO(benh): Get ZooKeeper timeout from configuration.
 // TODO(xujyan): Use peer constructor after switching to C++ 11.
 ZooKeeperMasterDetectorProcess::ZooKeeperMasterDetectorProcess(
-    const URL& url)
+    const zookeeper::URL& url)
   : ProcessBase(ID::generate("zookeeper-master-detector")),
     group(new Group(url.servers,
                     MASTER_DETECTOR_ZK_SESSION_TIMEOUT,
@@ -437,7 +437,7 @@ void ZooKeeperMasterDetectorProcess::fetched(
 }
 
 
-ZooKeeperMasterDetector::ZooKeeperMasterDetector(const URL& url)
+ZooKeeperMasterDetector::ZooKeeperMasterDetector(const zookeeper::URL& url)
 {
   process = new ZooKeeperMasterDetectorProcess(url);
   spawn(process);
