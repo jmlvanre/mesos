@@ -698,38 +698,6 @@ Future<size_t> LibeventSSLSocketImpl::recv(char* data, size_t size)
   return future;
 }
 
-// This function runs in the event loop. It is a continuation of
-// 'discardSend'. See 'Continuation' note at top of file.
-void LibeventSSLSocketImpl::_discardSend(SendRequest* request)
-{
-  bool discard = false;
-
-  synchronized (this) {
-    // Only discard if the active request matches what we're trying to
-    // discard. Otherwise it has been already completed.
-    if (sendRequest == request) {
-      discard = true;
-      sendRequest = NULL;
-    }
-  }
-
-  // Discard the promise outside of the object lock as the callbacks
-  // can be expensive.
-  if (discard) {
-    request->promise.discard();
-    delete request;
-  }
-}
-
-
-void LibeventSSLSocketImpl::discardSend(SendRequest* request)
-{
-  run_in_event_loop(lambda::bind(
-      &LibeventSSLSocketImpl::_discardSend,
-      this,
-      request));
-}
-
 
 // This function runs in the event loop. It is a continuation of
 // 'send'. See 'Continuation' note at top of file.
@@ -756,11 +724,7 @@ Future<size_t> LibeventSSLSocketImpl::send(const char* data, size_t size)
   // Optimistically construct a 'SendRequest' and future.
   // Copy this socket into the request to keep the it alive.
   SendRequest* request = new SendRequest(size, socket());
-  Future<size_t> future = request->promise.future()
-    .onDiscard(lambda::bind(
-        &LibeventSSLSocketImpl::discardSend,
-        this,
-        request));
+  Future<size_t> future = request->promise.future();
 
   // Assign 'sendRequest' under lock, fail on error.
   synchronized (this) {
@@ -813,11 +777,7 @@ Future<size_t> LibeventSSLSocketImpl::sendfile(
   // Optimistically construct a 'SendRequest' and future.
   // Copy this socket into the request to keep the it alive.
   SendRequest* request = new SendRequest(size, socket());
-  Future<size_t> future = request->promise.future()
-    .onDiscard(lambda::bind(
-        &LibeventSSLSocketImpl::discardSend,
-        this,
-        request));
+  Future<size_t> future = request->promise.future();
 
   // Assign 'sendRequest' under lock, fail on error.
   synchronized (this) {
