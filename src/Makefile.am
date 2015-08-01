@@ -439,6 +439,7 @@ libmesos_no_3rdparty_la_SOURCES =					\
 	master/detector.cpp						\
 	master/flags.cpp						\
 	master/http.cpp							\
+	master/maintenance.cpp						\
 	master/master.cpp						\
 	master/metrics.cpp						\
 	master/registry.hpp						\
@@ -724,6 +725,7 @@ libmesos_no_3rdparty_la_SOURCES +=					\
 	master/constants.hpp						\
 	master/detector.hpp						\
 	master/flags.hpp						\
+	master/maintenance.hpp						\
 	master/master.hpp						\
 	master/metrics.hpp						\
 	master/repairer.hpp						\
@@ -1632,6 +1634,7 @@ mesos_tests_SOURCES =						\
   tests/master_allocator_tests.cpp				\
   tests/master_authorization_tests.cpp				\
   tests/master_contender_detector_tests.cpp			\
+  tests/master_maintenance_tests.cpp				\
   tests/master_slave_reconciliation_tests.cpp			\
   tests/master_tests.cpp					\
   tests/master_validation_tests.cpp				\

@@ -47,6 +47,7 @@
 #include "master/flags.hpp"
 #include "master/master.hpp"
 #include "master/registrar.hpp"
+#include "master/maintenance.hpp"
 
 #include "state/log.hpp"
 #include "state/protobuf.hpp"
@@ -80,6 +81,9 @@ using ::testing::WithParamInterface;
 namespace mesos {
 namespace internal {
 namespace tests {
+
+using namespace mesos::maintenance;
+using namespace mesos::internal::master::maintenance;
 
 using state::Entry;
 using state::LogStorage;
@@ -312,6 +316,151 @@ TEST_P(RegistrarTest, Remove)
     AWAIT_EQ(false, registrar.apply(Owned<Operation>(new RemoveSlave(info3))));
   } else {
     AWAIT_EQ(true, registrar.apply(Owned<Operation>(new RemoveSlave(info3))));
+  }
+}
+
+
+// Note for the following tests: the state of the registrar can
+// only be viewed once per instantiation of the registrar.
+// To check the result of each operation, we must re-construct
+// the registrar, which is done by putting the code into blocks.
+
+// Adds maintenance schedules to the registry, one machine at a time.
+// Then removes machines from the schedule.
+TEST_P(RegistrarTest, UpdateMaintenanceSchedule)
+{
+  // Machine definitions used in this test.
+  MachineInfo mach1;
+  mach1.set_ip("0.0.0.1");
+
+  MachineInfo mach2;
+  mach2.set_hostname("2");
+
+  MachineInfo mach3;
+  mach3.set_hostname("3");
+  mach3.set_ip("0.0.0.3");
+
+  {
+    // Prepare the registrar.
+    Registrar registrar(flags, state);
+    AWAIT_READY(registrar.recover(master));
+
+    // Schdule one machine for maintenance.
+    maintenance::Schedule schedule;
+    schedule.add_windows()->add_machines()->CopyFrom(mach1);
+    AWAIT_EQ(true, registrar.apply(
+      Owned<Operation>(new UpdateSchedule(schedule))));
+  }
+
+  {
+    // Check that one schedule and one maintenance status was made.
+    Registrar registrar(flags, state);
+    Future<Registry> registry = registrar.recover(master);
+    AWAIT_READY(registry);
+    EXPECT_EQ(1, registry.get().schedules().size());
+    EXPECT_EQ(1, registry.get().schedules(0).windows().size());
+    EXPECT_EQ(1, registry.get().schedules(0).windows(0).machines().size());
+    EXPECT_EQ(1, registry.get().statuses().size());
+    EXPECT_EQ(maintenance::DRAINING, registry.get().statuses(0).mode());
+
+    // Extend the schdule by one machine (in a different window).
+    maintenance::Schedule schedule;
+    schedule.add_windows()->add_machines()->CopyFrom(mach1);
+    schedule.add_windows()->add_machines()->CopyFrom(mach2);
+    AWAIT_EQ(true, registrar.apply(
+      Owned<Operation>(new UpdateSchedule(schedule))));
+  }
+
+  {
+    // Check that both machines are part of maintenance.
+    Registrar registrar(flags, state);
+    Future<Registry> registry = registrar.recover(master);
+    AWAIT_READY(registry);
+    EXPECT_EQ(1, registry.get().schedules().size());
+    EXPECT_EQ(2, registry.get().schedules(0).windows().size());
+    EXPECT_EQ(1, registry.get().schedules(0).windows(0).machines().size());
+    EXPECT_EQ(1, registry.get().schedules(0).windows(1).machines().size());
+    EXPECT_EQ(2, registry.get().statuses().size());
+    EXPECT_EQ(maintenance::DRAINING, registry.get().statuses(1).mode());
+
+    // Extend a window by one machine.
+    maintenance::Schedule schedule;
+    schedule.add_windows()->add_machines()->CopyFrom(mach1);
+    maintenance::Window* window = schedule.add_windows();
+    window->add_machines()->CopyFrom(mach2);
+    window->add_machines()->CopyFrom(mach3);
+    AWAIT_EQ(true, registrar.apply(
+      Owned<Operation>(new UpdateSchedule(schedule))));
+  }
+
+  {
+    // Check that all three machines are included.
+    Registrar registrar(flags, state);
+    Future<Registry> registry = registrar.recover(master);
+    AWAIT_READY(registry);
+    EXPECT_EQ(1, registry.get().schedules().size());
+    EXPECT_EQ(2, registry.get().schedules(0).windows().size());
+    EXPECT_EQ(1, registry.get().schedules(0).windows(0).machines().size());
+    EXPECT_EQ(2, registry.get().schedules(0).windows(1).machines().size());
+    EXPECT_EQ(3, registry.get().statuses().size());
+    EXPECT_EQ(maintenance::DRAINING, registry.get().statuses(2).mode());
+
+    // Rearrange the schdule into one window.
+    maintenance::Schedule schedule;
+    maintenance::Window* window = schedule.add_windows();
+    window->add_machines()->CopyFrom(mach1);
+    window->add_machines()->CopyFrom(mach2);
+    window->add_machines()->CopyFrom(mach3);
+    AWAIT_EQ(true, registrar.apply(
+      Owned<Operation>(new UpdateSchedule(schedule))));
+  }
+
+  {
+    // Check that the statuses are unchanged, but the schedule is.
+    Registrar registrar(flags, state);
+    Future<Registry> registry = registrar.recover(master);
+    AWAIT_READY(registry);
+    EXPECT_EQ(1, registry.get().schedules().size());
+    EXPECT_EQ(1, registry.get().schedules(0).windows().size());
+    EXPECT_EQ(3, registry.get().schedules(0).windows(0).machines().size());
+    EXPECT_EQ(3, registry.get().statuses().size());
+    EXPECT_EQ(maintenance::DRAINING, registry.get().statuses(0).mode());
+    EXPECT_EQ(maintenance::DRAINING, registry.get().statuses(1).mode());
+    EXPECT_EQ(maintenance::DRAINING, registry.get().statuses(2).mode());
+
+    // Delete one machine from the schedule.
+    maintenance::Schedule schedule;
+    maintenance::Window* window = schedule.add_windows();
+    window->add_machines()->CopyFrom(mach2);
+    window->add_machines()->CopyFrom(mach3);
+    AWAIT_EQ(true, registrar.apply(
+      Owned<Operation>(new UpdateSchedule(schedule))));
+  }
+
+  {
+    // Check that one status is removed.
+    Registrar registrar(flags, state);
+    Future<Registry> registry = registrar.recover(master);
+    AWAIT_READY(registry);
+    EXPECT_EQ(1, registry.get().schedules().size());
+    EXPECT_EQ(1, registry.get().schedules(0).windows().size());
+    EXPECT_EQ(2, registry.get().schedules(0).windows(0).machines().size());
+    EXPECT_EQ(2, registry.get().statuses().size());
+
+    // Delete all machines from the schedule.
+    maintenance::Schedule schedule;
+    AWAIT_EQ(true, registrar.apply(
+      Owned<Operation>(new UpdateSchedule(schedule))));
+  }
+
+  {
+    // Check that all statuses are removed.
+    Registrar registrar(flags, state);
+    Future<Registry> registry = registrar.recover(master);
+    AWAIT_READY(registry);
+    EXPECT_EQ(1, registry.get().schedules().size());
+    EXPECT_EQ(0, registry.get().schedules(0).windows().size());
+    EXPECT_EQ(0, registry.get().statuses().size());
   }
 }
 

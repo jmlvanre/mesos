@@ -30,6 +30,9 @@
 
 #include <mesos/authorizer/authorizer.hpp>
 
+#include <mesos/maintenance/maintenance.hpp>
+
+#include <process/defer.hpp>
 #include <process/help.hpp>
 
 #include <process/metrics/metrics.hpp>
@@ -39,10 +42,13 @@
 #include <stout/json.hpp>
 #include <stout/lambda.hpp>
 #include <stout/net.hpp>
+#include <stout/nothing.hpp>
 #include <stout/numify.hpp>
 #include <stout/os.hpp>
+#include <stout/protobuf.hpp>
 #include <stout/result.hpp>
 #include <stout/strings.hpp>
+#include <stout/try.hpp>
 
 #include "common/attributes.hpp"
 #include "common/build.hpp"
@@ -53,6 +59,7 @@
 
 #include "logging/logging.hpp"
 
+#include "master/maintenance.hpp"
 #include "master/master.hpp"
 #include "master/validation.hpp"
 
@@ -96,6 +103,7 @@ using mesos::internal::model;
 // Pull in definitions from process.
 using process::http::Response;
 using process::http::Request;
+using process::Owned;
 
 
 // TODO(bmahler): Kill these in favor of automatic Proto->JSON Conversion (when
@@ -1324,6 +1332,115 @@ Future<Response> Master::Http::tasks(const Request& request) const
   }
 
   return OK(object, request.query.get("jsonp"));
+}
+
+
+// /master/maintenance/schedule endpoint help.
+const string Master::Http::MAINTENANCE_SCHEDULE_HELP = HELP(
+    TLDR(
+      "Returns or updates the cluster's maintenance schedule."),
+    USAGE(
+      "/master/maintenance.schedule"),
+    DESCRIPTION(
+      "GET: Returns the current maintenance schedule as JSON.",
+      "POST: Validates the request body as JSON",
+      "  and updates the maintenance schedule."));
+
+
+// /master/maintenance/schedule endpoint handler.
+Future<Response> Master::Http::maintenanceSchedule(const Request& request) const
+{
+  if (request.method != "GET" && request.method != "POST") {
+    return BadRequest("Expecting GET or POST.");
+  }
+
+  // JSON-ify and return the current maintenance schedule.
+  if (request.method == "GET") {
+    // TODO(josephw): Return more than one schedule.
+    mesos::maintenance::Schedule emptySchedule;
+    mesos::maintenance::Schedule& schedule = emptySchedule;
+    if (master->maintenanceSchedules.size() == 1) {
+      schedule = master->maintenanceSchedules.front();
+    }
+
+    return OK(JSON::Protobuf(schedule), request.query.get("jsonp"));
+  }
+
+  // Parse the POST body as JSON.
+  Try<JSON::Object> jsonSchedule = JSON::parse<JSON::Object>(request.body);
+  if (jsonSchedule.isError()) {
+    return BadRequest(jsonSchedule.error());
+  }
+
+  // Convert the schedule to a protobuf.
+  Try<mesos::maintenance::Schedule> schedule =
+    ::protobuf::parse<mesos::maintenance::Schedule>(jsonSchedule.get());
+  if (schedule.isError()) {
+    return BadRequest(schedule.error());
+  }
+
+  // Validate that the schedule only transitions machines between
+  // Normal and Draining modes.
+  Try<Nothing> isValid = maintenance::validation::schedule(
+      schedule.get(),
+      master->maintenanceStatuses);
+  if (isValid.isError()) {
+    return BadRequest(isValid.error());
+  }
+
+  // Defer a response until after the registry is up to date.
+  lambda::function<Future<Response>(bool)> continuation =
+    lambda::bind(&Master::Http::_maintenanceSchedule,
+      this,
+      schedule.get(),
+      lambda::_1);
+
+  return master->registrar->apply(Owned<Operation>(
+      new maintenance::UpdateSchedule(schedule.get())))
+    .then(defer(master->self(), continuation));
+}
+
+
+Future<Response> Master::Http::_maintenanceSchedule(
+    const mesos::maintenance::Schedule& schedule,
+    bool operationResult) const
+{
+  // Update the master's local state with the new schedule.
+
+  // TODO(josephw): allow more than one schedule.
+
+  // Put the machines in the updated schedule into a set.
+  hashset<MachineInfo> updated;
+  foreach (const mesos::maintenance::Window& window, schedule.windows()) {
+    foreach (const MachineInfo& machine, window.machines()) {
+      updated.insert(machine);
+    }
+  }
+
+  // Set each new machine in Draining mode and save the unavailability.
+  foreach (const mesos::maintenance::Window& window, schedule.windows()) {
+    foreach (const MachineInfo& machine, window.machines()) {
+      master->maintenanceStatuses[machine].mode = mesos::maintenance::DRAINING;
+      master->maintenanceStatuses[machine].unavailability =
+        window.unavailability();
+    }
+  }
+
+  // Delete the entry for each removed machine.
+  foreachkey (const MachineInfo& machine, master->maintenanceStatuses) {
+    if (updated.contains(machine)) {
+      continue;
+    }
+
+    master->maintenanceStatuses.erase(machine);
+  }
+
+  // Replace the old schedule(s) with the new schedule.
+  master->maintenanceSchedules.clear();
+  master->maintenanceSchedules.push_back(schedule);
+
+  // TODO(josephw): Consider returning a "201 Created".
+  return OK();
 }
 
 

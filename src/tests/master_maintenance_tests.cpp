@@ -1,0 +1,213 @@
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include <unistd.h>
+
+#include <gmock/gmock.h>
+
+#include <string>
+#include <vector>
+
+#include <mesos/scheduler/scheduler.hpp>
+
+#include <process/future.hpp>
+#include <process/http.hpp>
+#include <process/pid.hpp>
+
+#include <stout/json.hpp>
+#include <stout/net.hpp>
+#include <stout/option.hpp>
+#include <stout/try.hpp>
+#include <stout/strings.hpp>
+#include <stout/stringify.hpp>
+
+#include "master/master.hpp"
+
+#include "slave/flags.hpp"
+
+#include "tests/containerizer.hpp"
+#include "tests/mesos.hpp"
+#include "tests/utils.hpp"
+
+using mesos::internal::master::Master;
+
+using mesos::internal::slave::Slave;
+
+using process::Future;
+using process::PID;
+
+using process::http::BadRequest;
+using process::http::OK;
+using process::http::Response;
+
+using std::string;
+using std::vector;
+
+using testing::DoAll;
+
+namespace mesos {
+namespace internal {
+namespace tests {
+
+class MasterMaintenanceTest : public MesosTest {};
+
+
+// Posts valid and invalid schedules to the maintenance schedule endpoint.
+TEST_F(MasterMaintenanceTest, UpdateSchedule)
+{
+  // Set up a master.
+  Try<PID<Master>> master = StartMaster();
+  ASSERT_SOME(master);
+
+  // Header for all the POST's in this test.
+  hashmap<string, string> headers;
+  headers["Content-Type"] = "application/json";
+
+  // JSON machines used in this test.
+  JSON::Object machine1;
+  machine1.values["hostname"] = "Machine1";
+
+  JSON::Object machine2;
+  machine2.values["ip"] = "0.0.0.2";
+
+  JSON::Object badMachine;
+
+  // JSON arrays of machines used in this test.
+  JSON::Array machines1;
+  machines1.values.push_back(machine1);
+
+  JSON::Array emptyMachines;
+
+  JSON::Array badMachines;
+  badMachines.values.push_back(badMachine);
+
+  JSON::Array machines12;
+  machines12.values.push_back(machine2);
+  machines12.values.push_back(machine1);
+
+  // JSON windows used in this test.
+  JSON::Object window1;
+  window1.values["machines"] = machines1;
+
+  JSON::Object emptyWindow;
+  emptyWindow.values["machines"] = emptyMachines;
+
+  JSON::Object badWindow;
+  badWindow.values["machines"] = badMachines;
+
+  JSON::Object window12;
+  window12.values["machines"] = machines12;
+
+  // JSON schedules used in this test.
+  JSON::Object validSchedule;
+  JSON::Array validWindows;
+  validWindows.values.push_back(window1);
+  validSchedule.values["windows"] = validWindows;
+
+  JSON::Object badScheduleWithEmptyWindows;
+  JSON::Array emptyWindows;
+  emptyWindows.values.push_back(emptyWindow);
+  badScheduleWithEmptyWindows.values["windows"] = emptyWindows;
+
+  JSON::Object badScheduleWithDuplicateMachines;
+  JSON::Array duplicateWindows;
+  duplicateWindows.values.push_back(window1);
+  duplicateWindows.values.push_back(window1);
+  badScheduleWithDuplicateMachines.values["windows"] = duplicateWindows;
+
+  JSON::Object badScheduleWithBadMachines;
+  JSON::Array badWindows;
+  badWindows.values.push_back(badWindow);
+  badScheduleWithBadMachines.values["windows"] = badWindows;
+
+  JSON::Object validScheduleWithMoreMachines;
+  JSON::Array validWindowsWithTwoMachines;
+  validWindowsWithTwoMachines.values.push_back(window12);
+  validScheduleWithMoreMachines.values["windows"] = validWindowsWithTwoMachines;
+
+  JSON::Object validEmptySchedule;
+
+  // -- Start of the test. --
+
+  // Post a valid schedule.
+  Future<Response> response =
+    process::http::post(master.get(),
+      "maintenance.schedule",
+      headers,
+      stringify(validSchedule));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Get the maintenance schedule.
+  response =
+    process::http::get(master.get(),
+      "maintenance.schedule");
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Make sure the hostname was lowercased.
+  Try<JSON::Object> masterBlob =
+    JSON::parse<JSON::Object>(response.get().body);
+  Try<mesos::maintenance::Schedule> masterSchedule =
+    ::protobuf::parse<mesos::maintenance::Schedule>(masterBlob.get());
+  ASSERT_EQ(1, masterSchedule.get().windows().size());
+  ASSERT_EQ(1, masterSchedule.get().windows(0).machines().size());
+  ASSERT_EQ("machine1", masterSchedule.get().windows(0).machines(0).hostname());
+
+  // Try to replace with an invalid schedule.
+  response =
+    process::http::post(master.get(),
+      "maintenance.schedule",
+      headers,
+      stringify(badScheduleWithEmptyWindows));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(BadRequest().status, response);
+
+  // Try to replace with another invalid schedule.
+  response =
+    process::http::post(master.get(),
+      "maintenance.schedule",
+      headers,
+      stringify(badScheduleWithDuplicateMachines));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(BadRequest().status, response);
+
+  // Try to replace with yet another invalid schedule.
+  response =
+    process::http::post(master.get(),
+      "maintenance.schedule",
+      headers,
+      stringify(badScheduleWithBadMachines));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(BadRequest().status, response);
+
+  // Post a valid extended schedule.
+  response =
+    process::http::post(master.get(),
+      "maintenance.schedule",
+      headers,
+      stringify(validScheduleWithMoreMachines));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Delete the schedule (via an empty schedule).
+  response =
+    process::http::post(master.get(),
+      "maintenance.schedule",
+      headers,
+      stringify(validEmptySchedule));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+}
+
+} // namespace tests {
+} // namespace internal {
+} // namespace mesos {
