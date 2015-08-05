@@ -108,6 +108,7 @@ struct Slave
   Slave(const SlaveInfo& _info,
         const process::UPID& _pid,
         const MachineInfo& _machineInfo,
+        const Option<Unavailability>& _unavailability,
         const Option<std::string> _version,
         const process::Time& _registeredTime,
         const Resources& _checkpointedResources,
@@ -118,6 +119,7 @@ struct Slave
     : id(_info.id()),
       info(_info),
       machineInfo(_machineInfo),
+      unavailability(_unavailability),
       pid(_pid),
       version(_version),
       registeredTime(_registeredTime),
@@ -281,6 +283,14 @@ struct Slave
   const SlaveInfo info;
 
   MachineInfo machineInfo;
+
+  // If set, represents a scheduled unavailability event. The slave
+  // should be in `DRAINING` mode as the start time of the
+  // unavailability approaches. While in `DRAINING` mode:
+  //   1. New offers will have unavailability set.
+  //   2. Inverse offers will be sent to frameworks for this slave.
+  // TODO(jmlvanre): Support storing multiple unavailability events.
+  Option<Unavailability> unavailability;
 
   process::UPID pid;
 

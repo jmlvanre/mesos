@@ -3723,10 +3723,15 @@ void Master::_registerSlave(
     machineInfo.set_hostname(slaveInfo.hostname());
     machineInfo.set_ip(stringify(pid.address.ip));
 
+    Option<MaintenanceInfo> maintenanceInfo =
+      maintenanceStatuses.get(machineInfo);
+
     Slave* slave = new Slave(
         slaveInfo,
         pid,
         machineInfo,
+        maintenanceInfo.isSome() ?
+          Option<Unavailability>(maintenanceInfo.get().unavailability) : None(),
         version.empty() ? Option<string>::none() : version,
         Clock::now(),
         checkpointedResources);
@@ -3929,10 +3934,15 @@ void Master::_reregisterSlave(
     machineInfo.set_hostname(slaveInfo.hostname());
     machineInfo.set_ip(stringify(pid.address.ip));
 
+    Option<MaintenanceInfo> maintenanceInfo =
+      maintenanceStatuses.get(machineInfo);
+
     Slave* slave = new Slave(
         slaveInfo,
         pid,
         machineInfo,
+        maintenanceInfo.isSome() ?
+          Option<Unavailability>(maintenanceInfo.get().unavailability) : None(),
         version.empty() ? Option<string>::none() : version,
         Clock::now(),
         checkpointedResources,
@@ -4630,6 +4640,13 @@ void Master::offer(const FrameworkID& frameworkId,
       foreachkey (const ExecutorID& executorId, executors) {
         offer->add_executor_ids()->MergeFrom(executorId);
       }
+    }
+
+    // If the slave in this offer is planned to be unavailable due to
+    // maintenance in the future, then set the Unavailability.
+    if (maintenanceStatuses.contains(slave->machineInfo)) {
+      offer->mutable_unavailability()->CopyFrom(
+          maintenanceStatuses[slave->machineInfo].unavailability);
     }
 
     offers[offer->id()] = offer;

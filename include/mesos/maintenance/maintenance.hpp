@@ -32,7 +32,9 @@ struct MaintenanceInfo {
   MaintenanceInfo(const Unavailability& _unavailability)
     : unavailability(_unavailability) {}
 
+  // TODO(jmlvanre): Support multiple unavailability windows per machine.
   Unavailability unavailability;
+  
   mesos::maintenance::Mode mode;
 };
 

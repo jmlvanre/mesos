@@ -26,9 +26,11 @@
 #include <mesos/maintenance/maintenance.hpp>
 #include <mesos/scheduler/scheduler.hpp>
 
+#include <process/clock.hpp>
 #include <process/future.hpp>
 #include <process/http.hpp>
 #include <process/pid.hpp>
+#include <process/time.hpp>
 
 #include <stout/json.hpp>
 #include <stout/net.hpp>
@@ -50,8 +52,10 @@ using mesos::internal::master::Master;
 
 using mesos::internal::slave::Slave;
 
+using process::Clock;
 using process::Future;
 using process::PID;
+using process::Time;
 
 using process::http::BadRequest;
 using process::http::OK;
@@ -294,6 +298,103 @@ TEST_F(MasterMaintenanceTest, FailToUnscheduleDeactivatedMachines)
       headers,
       stringify(window1));
   AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+}
+
+
+// Test ensures that an offer will have an `unavailability` set if the
+// slave is scheduled to go down for maintenance.
+TEST_F(MasterMaintenanceTest, PendingUnavailabilityTest)
+{
+  Try<PID<Master>> master = StartMaster();
+  ASSERT_SOME(master);
+
+  MockExecutor exec(DEFAULT_EXECUTOR_ID);
+
+  Try<PID<Slave>> slave = StartSlave(&exec);
+  ASSERT_SOME(slave);
+
+  MockScheduler sched;
+  MesosSchedulerDriver driver(
+      &sched, DEFAULT_FRAMEWORK_INFO, master.get(), DEFAULT_CREDENTIAL);
+
+  EXPECT_CALL(sched, registered(&driver, _, _))
+    .Times(1);
+
+  // Intercept offers sent to the scheduler.
+  Future<vector<Offer>> normalOffers;
+  Future<vector<Offer>> unavailabilityOffers;
+  EXPECT_CALL(sched, resourceOffers(&driver, _))
+    .WillOnce(FutureArg<1>(&normalOffers))
+    .WillOnce(FutureArg<1>(&unavailabilityOffers))
+    .WillRepeatedly(Return()); // Ignore subsequent offers.
+
+  // Start the test.
+  driver.start();
+
+  // Wait for some normal offers.
+  AWAIT_READY(normalOffers);
+  EXPECT_NE(0u, normalOffers.get().size());
+
+   // Check that unavailability is not set.
+  foreach (const Offer& offer, normalOffers.get()) {
+    EXPECT_FALSE(offer.has_unavailability());
+
+    // We have a few seconds between allocations (by default).  That should
+    // be enough time to post a schedule before the next allocation.
+    driver.declineOffer(offer.id());
+  }
+
+  // Header for all the POST.
+  hashmap<string, string> headers;
+  headers["Content-Type"] = "application/json";
+
+  // Schedule this slave for maintenance.
+  JSON::Object machine;
+  machine.values["hostname"] = net::getHostname(slave.get().address.ip).get();
+  machine.values["ip"] = stringify(slave.get().address.ip);
+
+  JSON::Array machineArray;
+  machineArray.values.push_back(machine);
+
+  Time startTime = Clock::now() + Seconds(60);
+
+  JSON::Object unavailability;
+  unavailability.values["start"] = startTime.secs();
+
+  JSON::Object window;
+  window.values["machines"] = machineArray;
+  window.values["unavailability"] = unavailability;
+
+  JSON::Array windowArray;
+  windowArray.values.push_back(window);
+
+  JSON::Object schedule;
+  schedule.values["windows"] = windowArray;
+
+  Future<Response> response =
+    process::http::post(master.get(),
+      "maintenance.schedule",
+      headers,
+      stringify(schedule));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Speed up the test by not waiting until the next allocation.
+  driver.reviveOffers();
+
+  // Wait for some offers.
+  AWAIT_READY(unavailabilityOffers);
+  EXPECT_NE(0u, unavailabilityOffers.get().size());
+
+  // Check that each offer has an unavailability.
+  foreach (const Offer& offer, unavailabilityOffers.get()) {
+    EXPECT_TRUE(offer.has_unavailability());
+    EXPECT_EQ(startTime.secs(), offer.unavailability().start());
+  }
+
+  driver.stop();
+  driver.join();
+
+  Shutdown(); // Must shutdown before 'containerizer' gets deallocated.
 }
 
 
