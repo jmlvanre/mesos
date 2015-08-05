@@ -107,6 +107,7 @@ struct Slave
 {
   Slave(const SlaveInfo& _info,
         const process::UPID& _pid,
+        const MachineInfo& _machineInfo,
         const Option<std::string> _version,
         const process::Time& _registeredTime,
         const Resources& _checkpointedResources,
@@ -116,6 +117,7 @@ struct Slave
           std::vector<Task>())
     : id(_info.id()),
       info(_info),
+      machineInfo(_machineInfo),
       pid(_pid),
       version(_version),
       registeredTime(_registeredTime),
@@ -277,6 +279,8 @@ struct Slave
 
   const SlaveID id;
   const SlaveInfo info;
+
+  MachineInfo machineInfo;
 
   process::UPID pid;
 
@@ -927,6 +931,11 @@ private:
   // Indicates when recovery is complete. Recovery begins once the
   // master is elected as a leader.
   Option<process::Future<Nothing>> recovered;
+
+  // All the slaves running on a particular machine. This is used by
+  // maintenance primitives to update the unavailability of all the
+  // slaves running on a particular machine.
+  hashmap<MachineInfo, hashset<SlaveID>> machineInfos;
 
   struct Slaves
   {

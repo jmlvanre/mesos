@@ -1361,8 +1361,8 @@ Future<Nothing> Master::_recover(const Registry& registry)
 
     // Save the unavailability for each machine.
     foreach (const mesos::maintenance::Window& window, schedule.windows()) {
-      foreach (const MachineInfo& machine, window.machines()) {
-        maintenanceStatuses[machine] =
+      foreach (const MachineInfo& machineInfo, window.machines()) {
+        maintenanceStatuses[machineInfo] =
           MaintenanceInfo(window.unavailability());
       }
     }
@@ -3717,9 +3717,16 @@ void Master::_registerSlave(
         stringify(slaveInfo.id()));
     send(pid, message);
   } else {
+    MachineInfo machineInfo;
+
+    // Aggregate the hostname and ip data into machineInfo.
+    machineInfo.set_hostname(slaveInfo.hostname());
+    machineInfo.set_ip(stringify(pid.address.ip));
+
     Slave* slave = new Slave(
         slaveInfo,
         pid,
+        machineInfo,
         version.empty() ? Option<string>::none() : version,
         Clock::now(),
         checkpointedResources);
@@ -3915,9 +3922,17 @@ void Master::_reregisterSlave(
     send(pid, message);
   } else {
     // Re-admission succeeded.
+
+    MachineInfo machineInfo;
+
+    // Aggregate the hostname and ip data into machineInfo.
+    machineInfo.set_hostname(slaveInfo.hostname());
+    machineInfo.set_ip(stringify(pid.address.ip));
+
     Slave* slave = new Slave(
         slaveInfo,
         pid,
+        machineInfo,
         version.empty() ? Option<string>::none() : version,
         Clock::now(),
         checkpointedResources,
@@ -5328,6 +5343,10 @@ void Master::addSlave(
 
   link(slave->pid);
 
+  // Map the slave to the machine it is running on.
+  CHECK(!machineInfos[slave->machineInfo].contains(slave->id));
+  machineInfos[slave->machineInfo].insert(slave->id);
+
   // Set up an observer for the slave.
   slave->observer = new SlaveObserver(
       slave->pid,
@@ -5471,6 +5490,13 @@ void Master::removeSlave(
   slaves.registered.remove(slave);
   slaves.removed.put(slave->id, Nothing());
   authenticated.erase(slave->pid);
+
+  // Remove the slave from the machineInfos mapping.
+  machineInfos[slave->machineInfo].erase(slave->id);
+  if (machineInfos[slave->machineInfo].empty()) {
+    // Clean up if this was the last slave on the machine.
+    machineInfos.erase(slave->machineInfo);
+  }
 
   // Kill the slave observer.
   terminate(slave->observer);
