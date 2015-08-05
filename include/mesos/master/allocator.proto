@@ -28,3 +28,20 @@ message RoleInfo {
   required string name = 1;
   optional double weight = 2 [default = 1];
 }
+
+// Describes a response to an inverse offer.
+message InverseOfferResponse {
+  enum Status {
+    // We have not received a response yet. This is the default state
+    // before receiving a response.
+    UNKNOWN = 1;
+    // The framework is ok with the inverse offer.
+    ACCEPT = 2;
+    // The framework wants to block the maintenance operation from
+    // happening. An example would be that it can not meet its SLA by
+    // losing resources.
+    DECLINE = 3;
+  }
+
+  required Status status = 1;
+}

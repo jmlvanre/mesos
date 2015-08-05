@@ -112,6 +112,7 @@ public:
   void addSlave(
       const SlaveID& slaveId,
       const SlaveInfo& slaveInfo,
+      const Option<Unavailability>& unavailability,
       const Resources& total,
       const hashmap<FrameworkID, Resources>& used);
 
@@ -254,6 +255,52 @@ protected:
     bool checkpoint; // Whether slave supports checkpointing.
 
     std::string hostname;
+
+    // Represents a scheduled unavailability for a specific slave, and
+    // the responses from frameworks as to whether they will be able
+    // to gracefully handle this unavailability.
+    struct UnavailabilityStatus
+    {
+      UnavailabilityStatus(const Unavailability& _unavailability)
+        : unavailability(_unavailability) {}
+
+      // The start time and optional duration of the event.
+      Unavailability unavailability;
+
+      struct Response
+      {
+        Response() : offerOutstanding(false)
+        {
+          response.set_status(mesos::master::InverseOfferResponse::UNKNOWN);
+        }
+
+        // The current acknowledgement from a framework to the inverse
+        // offer associated with this slave.
+        // Note: We currently lose this information during a master
+        // fail over since it is not persisted or replicated. This is
+        // ok as the new master's allocator will send out new inverse
+        // offers and re-collect the information. This is similar to
+        // all the outstanding offers from an old master being
+        // invalidated, and new offers being sent out.
+        mesos::master::InverseOfferResponse response;
+
+        // Represent the "unit of accounting" for maintenance. When
+        // true this means an inverse offer has been sent out. When
+        // false this means no offer is currently outstanding.
+        bool offerOutstanding;
+
+        // TODO(jmlvanre): Capture decline message.
+      };
+
+      // A mapping of frameworks to their responses to the inverse
+      // offer associated with this unavailability.
+      hashmap<FrameworkID, Response> responses;
+    };
+
+    // When the unavailability is set the slave is scheduled to be
+    // unavailable at a given point in time, for an optional duration.
+    // This information is used to send out `InverseOffers`.
+    Option<UnavailabilityStatus> unavailabilityStatus;
   };
 
   hashmap<SlaveID, Slave> slaves;
@@ -506,6 +553,7 @@ void
 HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::addSlave(
     const SlaveID& slaveId,
     const SlaveInfo& slaveInfo,
+    const Option<Unavailability>& unavailability,
     const Resources& total,
     const hashmap<FrameworkID, Resources>& used)
 {
@@ -536,6 +584,10 @@ HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::addSlave(
   slaves[slaveId].activated = true;
   slaves[slaveId].checkpoint = slaveInfo.checkpoint();
   slaves[slaveId].hostname = slaveInfo.hostname();
+  if (unavailability.isSome()) {
+    slaves[slaveId].unavailabilityStatus =
+      typename Slave::UnavailabilityStatus(unavailability.get());
+  }
 
   LOG(INFO) << "Added slave " << slaveId << " (" << slaves[slaveId].hostname
             << ") with " << slaves[slaveId].total

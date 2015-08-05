@@ -5435,6 +5435,7 @@ void Master::addSlave(
   allocator->addSlave(
       slave->id,
       slave->info,
+      slave->unavailability,
       slave->totalResources,
       slave->usedResources);
 }
