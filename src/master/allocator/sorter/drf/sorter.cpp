@@ -162,6 +162,24 @@ hashmap<SlaveID, Resources> DRFSorter::allocation(const string& name)
 }
 
 
+hashmap<std::string, Resources> DRFSorter::allocation(const SlaveID& slaveId)
+{
+  // TODO(jmlvanre): We can index the allocation by slaveId to make
+  // this faster. It is a tradeoff between speed vs. memory. For now
+  // we use existing data structures.
+
+  hashmap<std::string, Resources> result;
+
+  foreachpair (const string& name, Allocation& allocation, allocations) {
+    if (allocation.resources.contains(slaveId)) {
+      result.emplace(name, allocation.resources[slaveId]);
+    }
+  }
+
+  return result;
+}
+
+
 Resources DRFSorter::allocation(const string& name, const SlaveID& slaveId)
 {
   CHECK(contains(name));
