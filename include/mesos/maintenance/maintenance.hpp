@@ -22,6 +22,7 @@
 // ONLY USEFUL AFTER RUNNING PROTOC.
 #include <mesos/maintenance/maintenance.pb.h>
 
+#include <mesos/resources.hpp>
 
 namespace mesos {
 
@@ -36,6 +37,15 @@ struct MaintenanceInfo {
   Unavailability unavailability;
   
   mesos::maintenance::Mode mode;
+};
+
+
+// A wrapper for resources and unavailability used to communicate
+// between the Allocator and Master.
+struct UnavailableResources
+{
+  Resources resources;
+  Unavailability unavailability;
 };
 
 } // namespace mesos {

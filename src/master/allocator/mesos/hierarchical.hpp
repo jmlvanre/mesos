@@ -89,6 +89,10 @@ public:
       const lambda::function<
           void(const FrameworkID&,
                const hashmap<SlaveID, Resources>&)>& offerCallback,
+      const lambda::function<
+          void(const FrameworkID&,
+               const hashmap<SlaveID, UnavailableResources>&)>&
+        inverseOfferCallback,
       const hashmap<std::string, mesos::master::RoleInfo>& roles);
 
   void addFramework(
@@ -175,6 +179,9 @@ protected:
   // Allocate resources from the specified slaves.
   void allocate(const hashset<SlaveID>& slaveIds);
 
+  // Send inverse offers from the specified slaves.
+  void inverse(const hashset<SlaveID>& slaveIds);
+
   // Remove a filter for the specified framework.
   void expire(const FrameworkID& frameworkId, Filter* filter);
 
@@ -197,6 +204,10 @@ protected:
   lambda::function<
       void(const FrameworkID&,
            const hashmap<SlaveID, Resources>&)> offerCallback;
+
+  lambda::function<
+      void(const FrameworkID&,
+           const hashmap<SlaveID, UnavailableResources>&)> inverseOfferCallback;
 
   struct Metrics
   {
@@ -376,10 +387,15 @@ HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::initialize(
     const lambda::function<
         void(const FrameworkID&,
              const hashmap<SlaveID, Resources>&)>& _offerCallback,
+    const lambda::function<
+        void(const FrameworkID&,
+              const hashmap<SlaveID, UnavailableResources>&)>&
+      _inverseOfferCallback,
     const hashmap<std::string, mesos::master::RoleInfo>& _roles)
 {
   allocationInterval = _allocationInterval;
   offerCallback = _offerCallback;
+  inverseOfferCallback = _inverseOfferCallback;
   roles = _roles;
   initialized = true;
 
@@ -1084,6 +1100,86 @@ HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::allocate(
     // Now offer the resources to each framework.
     foreachkey (const FrameworkID& frameworkId, offerable) {
       offerCallback(frameworkId, offerable[frameworkId]);
+    }
+  }
+
+  inverse(slaveIds_);
+}
+
+
+template <class RoleSorter, class FrameworkSorter>
+void
+HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::inverse(
+    const hashset<SlaveID>& slaveIds_)
+{
+  if (roleSorter->count() == 0) {
+    LOG(ERROR) << "No roles specified, cannot send inverse offers!";
+    return;
+  }
+
+  hashmap<FrameworkID, hashmap<SlaveID, UnavailableResources>> offerable;
+
+  // For maintenance, we use the framework sorters to determine which
+  // frameworks have (1) reserved and / or (2) unreserved resource on
+  // the specified slaveIds. This way we only send inverse offers to
+  // frameworks that have the potential to lose something.
+  // We keep track of which frameworks already have an outstanding
+  // inverse offer for the given slave in the UnavailabilityStatus of
+  // the specific slave using the `offerOutstanding` flag. This is
+  // equivalent to the accounting we do for resources when we send
+  // regular offers. If we didn't keep track of outstanding offers
+  // then we would keep generating new inverse offers even though the
+  // framework had not responded yet.
+
+  foreachvalue (FrameworkSorter* frameworkSorter, frameworkSorters) {
+    foreach (const SlaveID& slaveId, slaveIds_) {
+      CHECK(slaves.contains(slaveId));
+
+      if (slaves[slaveId].unavailabilityStatus.isSome()) {
+        typename Slave::UnavailabilityStatus unavailabilityStatus =
+          slaves[slaveId].unavailabilityStatus.get();
+
+        hashmap<std::string, Resources> allocation =
+          frameworkSorter->allocation(slaveId);
+
+        foreachkey (const std::string& frameworkId_, allocation) {
+          FrameworkID frameworkId;
+          frameworkId.set_value(frameworkId_);
+
+          // If this framework doesn't already have inverse offers for
+          // the specified slave.
+          if (!offerable[frameworkId].contains(slaveId)) {
+            // If we there isn't already an outstanding inverse offer
+            // to this framework for the specified slave.
+            if (!unavailabilityStatus.responses.contains(frameworkId) ||
+                !unavailabilityStatus.responses[frameworkId].offerOutstanding) {
+              // For now we send inverse offers with empty resources
+              // when the inverse offer represents maintenance on the
+              // machine. In the future we could be more specific
+              // about the resources on the host, as we have the
+              // information available.
+              offerable[frameworkId][slaveId] =
+                UnavailableResources{
+                    Resources(),
+                    unavailabilityStatus.unavailability};
+
+              // Mark this framework as having an offer oustanding for
+              // the specified slave.
+              unavailabilityStatus.responses[frameworkId].offerOutstanding =
+                true;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (offerable.empty()) {
+    VLOG(1) << "No inverse offers to send out!";
+  } else {
+    // Now send inverse offers to each framework.
+    foreachkey (const FrameworkID& frameworkId, offerable) {
+      inverseOfferCallback(frameworkId, offerable[frameworkId]);
     }
   }
 }
