@@ -235,6 +235,22 @@ struct Slave
     offers.erase(offer);
   }
 
+  void addInverseOffer(InverseOffer* inverseOffer)
+  {
+    CHECK(!inverseOffers.contains(inverseOffer))
+      << "Duplicate inverse offer " << inverseOffer->id();
+
+    inverseOffers.insert(inverseOffer);
+  }
+
+  void removeInverseOffer(InverseOffer* inverseOffer)
+  {
+    CHECK(inverseOffers.contains(inverseOffer))
+      << "Unknown inverse offer " << inverseOffer->id();
+
+    inverseOffers.erase(inverseOffer);
+  }
+
   bool hasExecutor(const FrameworkID& frameworkId,
                    const ExecutorID& executorId) const
   {
@@ -325,6 +341,9 @@ struct Slave
 
   // Active offers on this slave.
   hashset<Offer*> offers;
+
+  // Active inverse offers on this slave.
+  hashset<InverseOffer*> inverseOffers;
 
   hashmap<FrameworkID, Resources> usedResources;  // Active task / executors.
   Resources offeredResources; // Offers.
@@ -712,8 +731,15 @@ protected:
   // Remove an offer and optionally rescind the offer as well.
   void removeOffer(Offer* offer, bool rescind = false);
 
+  // Remove an inverse offer after specified timeout
+  void inverseOfferTimeout(const OfferID& inverseOfferId);
+
+  // Remove an inverse offer and optionally rescind it as well.
+  void removeInverseOffer(InverseOffer* inverseOffer, bool rescind = false);
+
   Framework* getFramework(const FrameworkID& frameworkId);
   Offer* getOffer(const OfferID& offerId);
+  InverseOffer* getInverseOffer(const OfferID& inverseOfferId);
 
   FrameworkID newFrameworkId();
   OfferID newOfferId();
@@ -1106,6 +1132,9 @@ private:
 
   hashmap<OfferID, Offer*> offers;
   hashmap<OfferID, process::Timer> offerTimers;
+
+  hashmap<OfferID, InverseOffer*> inverseOffers;
+  hashmap<OfferID, process::Timer> inverseOfferTimers;
 
   hashmap<std::string, Role*> roles;
 
@@ -1531,6 +1560,21 @@ struct Framework
     offers.erase(offer);
   }
 
+  void addInverseOffer(InverseOffer* inverseOffer)
+  {
+    CHECK(!inverseOffers.contains(inverseOffer))
+      << "Duplicate inverse offer " << inverseOffer->id();
+    inverseOffers.insert(inverseOffer);
+  }
+
+  void removeInverseOffer(InverseOffer* inverseOffer)
+  {
+    CHECK(inverseOffers.contains(inverseOffer))
+      << "Unknown inverse offer " << inverseOffer->id();
+
+    inverseOffers.erase(inverseOffer);
+  }
+
   bool hasExecutor(const SlaveID& slaveId,
                    const ExecutorID& executorId)
   {
@@ -1740,6 +1784,8 @@ struct Framework
   boost::circular_buffer<std::shared_ptr<Task>> completedTasks;
 
   hashset<Offer*> offers; // Active offers for framework.
+
+  hashset<InverseOffer*> inverseOffers; // Active inverse offers for framework.
 
   hashmap<SlaveID, hashmap<ExecutorID, ExecutorInfo>> executors;
 

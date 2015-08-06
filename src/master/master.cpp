@@ -917,6 +917,13 @@ void Master::finalize()
       removeOffer(offer);
     }
 
+    // Remove inverse offers.
+    foreach (InverseOffer* inverseOffer, utils::copy(slave->inverseOffers)) {
+      // We don't need to update the allocator because the slave has
+      // already been removed.
+      removeInverseOffer(inverseOffer);
+    }
+
     // Terminate the slave observer.
     terminate(slave->observer);
     wait(slave->observer);
@@ -942,12 +949,14 @@ void Master::finalize()
     CHECK(framework->tasks.empty());
     CHECK(framework->executors.empty());
     CHECK(framework->offers.empty());
+    CHECK(framework->inverseOffers.empty());
 
     delete framework;
   }
   frameworks.registered.clear();
 
   CHECK(offers.empty());
+  CHECK(inverseOffers.empty());
 
   foreachvalue (Future<Option<string>> future, authenticating) {
     // NOTE: This is necessary during tests because a copy of
@@ -2295,6 +2304,16 @@ void Master::_subscribe(
         removeOffer(offer, true); // Rescind.
       }
 
+      // Also remove inverse offers.
+      foreach (InverseOffer* inverseOffer,
+               utils::copy(framework->inverseOffers)) {
+        allocator->updateInverseOffer(
+            inverseOffer->slave_id(),
+            inverseOffer->framework_id(),
+            None());
+        removeInverseOffer(inverseOffer, true); // Rescind.
+      }
+
       // TODO(bmahler): Shouldn't this re-link with the scheduler?
       framework->connected = true;
 
@@ -2448,6 +2467,15 @@ void Master::deactivate(Framework* framework)
         offer->framework_id(), offer->slave_id(), offer->resources(), None());
     removeOffer(offer, true); // Rescind.
   }
+
+  // Remove the framework's inverse offers.
+  foreach (InverseOffer* inverseOffer, utils::copy(framework->inverseOffers)) {
+    allocator->updateInverseOffer(
+        inverseOffer->slave_id(),
+        inverseOffer->framework_id(),
+        None());
+    removeInverseOffer(inverseOffer, true); // Rescind.
+  }
 }
 
 
@@ -2486,6 +2514,16 @@ void Master::deactivate(Slave* slave)
         offer->framework_id(), slave->id, offer->resources(), None());
 
     removeOffer(offer, true); // Rescind!
+  }
+
+  // Remove and rescind inverse offers.
+  foreach (InverseOffer* inverseOffer, utils::copy(slave->inverseOffers)) {
+    allocator->updateInverseOffer(
+        slave->id,
+        inverseOffer->framework_id(),
+        None());
+
+    removeInverseOffer(inverseOffer, true); // Rescind!
   }
 }
 
@@ -4102,6 +4140,9 @@ void Master::updateSlave(
     }
   }
 
+  // We don't need to rescind inverse offers here as they are
+  // unrelated to oversubscription.
+
   slave->totalResources -= slave->totalResources.revocable();
   slave->totalResources += oversubscribedResources.revocable();
 
@@ -4155,6 +4196,16 @@ Nothing Master::updateUnavailability(
             offer->framework_id(), slave->id, offer->resources(), None());
 
         removeOffer(offer, true); // Rescind!
+      }
+
+      // Remove and rescind inverse offers since the allocator will
+      // send new inverse offers for the updated unavailability.
+      foreach (InverseOffer* inverseOffer, utils::copy(slave->inverseOffers)) {
+        allocator->updateInverseOffer(
+            slave->id,
+            inverseOffer->framework_id(),
+            None());
+        removeInverseOffer(inverseOffer, true); // Rescind!
       }
 
       // We remove / resind all the offers first so that any calls to
@@ -4778,7 +4829,81 @@ void Master::offer(const FrameworkID& frameworkId,
 void Master::inverseOffer(const FrameworkID& frameworkId,
                    const hashmap<SlaveID, UnavailableResources>& resources)
 {
-  // TODO(jmlvanre): Implement this function.
+  if (!frameworks.registered.contains(frameworkId) ||
+      !frameworks.registered[frameworkId]->active) {
+    LOG(INFO) << "Master ignoring inverse offers to framework " << frameworkId
+              << " because the framework has terminated or is inactive";
+    return;
+  }
+
+  // Create an inverse offer for each slave and add it to the message.
+  ResourceOffersMessage message;
+
+  Framework* framework = CHECK_NOTNULL(frameworks.registered[frameworkId]);
+  foreachpair (const SlaveID& slaveId,
+               const UnavailableResources& unavailableResources,
+               resources) {
+    if (!slaves.registered.contains(slaveId)) {
+      LOG(INFO)
+        << "Master ignoring inverse offers to framework " << *framework
+        << " because slave " << slaveId << " is not valid";
+      continue;
+    }
+
+    Slave* slave = slaves.registered.get(slaveId);
+    CHECK_NOTNULL(slave);
+
+    // This could happen if the allocator dispatched
+    // 'Master::inverseOffer' before the slave was deactivated in the
+    // allocator.
+    if (!slave->active) {
+      LOG(INFO)
+        << "Master ignoring inverse offers because slave " << *slave
+        << " is " << (slave->connected ? "deactivated" : "disconnected");
+
+      continue;
+    }
+
+    InverseOffer* inverseOffer = new InverseOffer();
+
+    // We use the same id generator as regular offers so that we can
+    // have unique ids accross both. This way we can re-use some of
+    // the `OfferID` only messages.
+    inverseOffer->mutable_id()->CopyFrom(newOfferId());
+    inverseOffer->mutable_framework_id()->CopyFrom(framework->id());
+    inverseOffer->mutable_slave_id()->CopyFrom(slave->id);
+    inverseOffer->mutable_unavailability()->CopyFrom(
+        unavailableResources.unavailability);
+
+    inverseOffers[inverseOffer->id()] = inverseOffer;
+
+    framework->addInverseOffer(inverseOffer);
+    slave->addInverseOffer(inverseOffer);
+
+    // TODO(jmlvanre): Do we want a separate flag for inverse offer
+    // timeout?
+    if (flags.offer_timeout.isSome()) {
+      // Rescind the inverse offer after the timeout elapses.
+      inverseOfferTimers[inverseOffer->id()] =
+        delay(flags.offer_timeout.get(),
+              self(),
+              &Self::inverseOfferTimeout,
+              inverseOffer->id());
+    }
+
+    // Add the inverse offer *AND* the corresponding slave's PID.
+    message.add_inverse_offers()->CopyFrom(*inverseOffer);
+    message.add_pids(slave->pid);
+  }
+
+  if (message.inverse_offers().size() == 0) {
+    return;
+  }
+
+  LOG(INFO) << "Sending " << message.inverse_offers().size()
+            << " inverse offers to framework " << *framework;
+
+  framework->send(message);
 }
 
 
@@ -5239,9 +5364,19 @@ void Master::_failoverFramework(Framework* framework)
     removeOffer(offer);
   }
 
+  // Also remove the inverse offers.
+  foreach (InverseOffer* inverseOffer, utils::copy(framework->inverseOffers)) {
+    allocator->updateInverseOffer(
+        inverseOffer->slave_id(),
+        inverseOffer->framework_id(),
+        None());
+    removeInverseOffer(inverseOffer);
+  }
+
   // Reconnect and reactivate the framework.
   framework->connected = true;
 
+  // Reactivate the framework.
   // NOTE: We do this after recovering resources (above) so that
   // the allocator has the correct view of the framework's share.
   if (!framework->active) {
@@ -5337,6 +5472,15 @@ void Master::removeFramework(Framework* framework)
         offer->resources(),
         None());
     removeOffer(offer);
+  }
+
+  // Also remove the inverse offers.
+  foreach (InverseOffer* inverseOffer, utils::copy(framework->inverseOffers)) {
+    allocator->updateInverseOffer(
+        inverseOffer->slave_id(),
+        inverseOffer->framework_id(),
+        None());
+    removeInverseOffer(inverseOffer);
   }
 
   // Remove the framework's executors for correct resource accounting.
@@ -5592,6 +5736,15 @@ void Master::removeSlave(
 
     // Remove and rescind offers.
     removeOffer(offer, true); // Rescind!
+  }
+
+  // Remove inverse offers because sending them for a slave that is
+  // gone doesn't make sense.
+  foreach (InverseOffer* inverseOffer, utils::copy(slave->inverseOffers)) {
+    // We don't need to update the allocator because we've already
+    // callled `RemoveSlave()`.
+    // Remove and rescind inverse offers.
+    removeInverseOffer(inverseOffer, true); // Rescind!
   }
 
   // Mark the slave as being removed.
@@ -5940,6 +6093,58 @@ void Master::removeOffer(Offer* offer, bool rescind)
 }
 
 
+void Master::inverseOfferTimeout(const OfferID& inverseOfferId)
+{
+  InverseOffer* inverseOffer = getInverseOffer(inverseOfferId);
+  if (inverseOffer != NULL) {
+    allocator->updateInverseOffer(
+        inverseOffer->slave_id(),
+        inverseOffer->framework_id(),
+        None());
+    removeInverseOffer(inverseOffer, true);
+  }
+}
+
+
+void Master::removeInverseOffer(InverseOffer* inverseOffer, bool rescind)
+{
+  // Remove from framework.
+  Framework* framework = getFramework(inverseOffer->framework_id());
+  CHECK(framework != NULL)
+    << "Unknown framework " << inverseOffer->framework_id()
+    << " in the inverse offer " << inverseOffer->id();
+
+  framework->removeInverseOffer(inverseOffer);
+
+  // Remove from slave.
+  Slave* slave = slaves.registered.get(inverseOffer->slave_id());
+
+  CHECK(slave != NULL)
+    << "Unknown slave " << inverseOffer->slave_id()
+    << " in the inverse offer " << inverseOffer->id();
+
+  slave->removeInverseOffer(inverseOffer);
+
+  if (rescind) {
+    RescindResourceOfferMessage message;
+    message.mutable_offer_id()->CopyFrom(inverseOffer->id());
+    framework->send(message);
+  }
+
+  // Remove and cancel inverse offer removal timers. Canceling the
+  // Timers is only done to avoid having too many active Timers in
+  // libprocess.
+  if (inverseOfferTimers.contains(inverseOffer->id())) {
+    Clock::cancel(inverseOfferTimers[inverseOffer->id()]);
+    inverseOfferTimers.erase(inverseOffer->id());
+  }
+
+  // Delete it.
+  inverseOffers.erase(inverseOffer->id());
+  delete inverseOffer;
+}
+
+
 // TODO(bmahler): Consider killing this.
 Framework* Master::getFramework(const FrameworkID& frameworkId)
 {
@@ -5953,6 +6158,14 @@ Framework* Master::getFramework(const FrameworkID& frameworkId)
 Offer* Master::getOffer(const OfferID& offerId)
 {
   return offers.contains(offerId) ? offers[offerId] : NULL;
+}
+
+
+// TODO(bmahler): Consider killing this.
+InverseOffer* Master::getInverseOffer(const OfferID& inverseOfferId)
+{
+  return inverseOffers.contains(inverseOfferId) ?
+    inverseOffers[inverseOfferId] : NULL;
 }
 
 
