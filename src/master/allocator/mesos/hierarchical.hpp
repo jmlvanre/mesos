@@ -145,6 +145,10 @@ public:
       const SlaveID& slaveId,
       const std::vector<Offer::Operation>& operations);
 
+  void updateUnavailability(
+      const SlaveID& slaveId,
+      const Option<Unavailability>& unavailability);
+
   void recoverResources(
       const FrameworkID& frameworkId,
       const SlaveID& slaveId,
@@ -817,6 +821,24 @@ HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::updateAvailable(
   roleSorter->update(slaveId, slaves[slaveId].total.unreserved());
 
   return Nothing();
+}
+
+
+template <class RoleSorter, class FrameworkSorter>
+void
+HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::updateUnavailability(
+    const SlaveID& slaveId,
+    const Option<Unavailability>& unavailability)
+{
+  CHECK(initialized);
+  CHECK(slaves.contains(slaveId));
+
+  slaves[slaveId].unavailabilityStatus = unavailability.isSome() ?
+    Option<typename Slave::UnavailabilityStatus>::some(
+        typename Slave::UnavailabilityStatus(unavailability.get())) :
+    None();
+
+  allocate(slaveId);
 }
 
 

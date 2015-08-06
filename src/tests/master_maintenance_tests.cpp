@@ -310,7 +310,11 @@ TEST_F(MasterMaintenanceTest, PendingUnavailabilityTest)
 
   MockExecutor exec(DEFAULT_EXECUTOR_ID);
 
-  Try<PID<Slave>> slave = StartSlave(&exec);
+  const string maintenanceHostname = "maintenance-host";
+
+  slave::Flags slaveFlags = this->CreateSlaveFlags();
+  slaveFlags.hostname = maintenanceHostname;
+  Try<PID<Slave>> slave = StartSlave(&exec, slaveFlags);
   ASSERT_SOME(slave);
 
   MockScheduler sched;
@@ -328,6 +332,12 @@ TEST_F(MasterMaintenanceTest, PendingUnavailabilityTest)
     .WillOnce(FutureArg<1>(&unavailabilityOffers))
     .WillRepeatedly(Return()); // Ignore subsequent offers.
 
+  // The original offers should be rescinded when the unavailability
+  // is changed.
+  Future<Nothing> offerRescinded;
+  EXPECT_CALL(sched, offerRescinded(&driver, _))
+    .WillOnce(FutureSatisfy(&offerRescinded));
+
   // Start the test.
   driver.start();
 
@@ -338,10 +348,6 @@ TEST_F(MasterMaintenanceTest, PendingUnavailabilityTest)
    // Check that unavailability is not set.
   foreach (const Offer& offer, normalOffers.get()) {
     EXPECT_FALSE(offer.has_unavailability());
-
-    // We have a few seconds between allocations (by default).  That should
-    // be enough time to post a schedule before the next allocation.
-    driver.declineOffer(offer.id());
   }
 
   // Header for all the POST.
@@ -350,13 +356,16 @@ TEST_F(MasterMaintenanceTest, PendingUnavailabilityTest)
 
   // Schedule this slave for maintenance.
   JSON::Object machine;
-  machine.values["hostname"] = net::getHostname(slave.get().address.ip).get();
+  machine.values["hostname"] = maintenanceHostname;
   machine.values["ip"] = stringify(slave.get().address.ip);
 
   JSON::Array machineArray;
   machineArray.values.push_back(machine);
 
-  Time startTime = Clock::now() + Seconds(60);
+  // The start time of the maintenance window. We round to the nearest
+  // second as comparison of doubles is not always accurate.
+  Duration startTime =
+    Duration::create(std::round((Clock::now() + Seconds(60)).secs())).get();
 
   JSON::Object unavailability;
   unavailability.values["start"] = startTime.secs();
@@ -371,15 +380,16 @@ TEST_F(MasterMaintenanceTest, PendingUnavailabilityTest)
   JSON::Object schedule;
   schedule.values["windows"] = windowArray;
 
+  // We have a few seconds between the first set of offers and the
+  // next allocation of offers.  This should be enough time to perform
+  // a maintenance schedule update.  This update will also trigger the
+  // rescinding of offers from the scheduled slave.
   Future<Response> response =
     process::http::post(master.get(),
       "maintenance.schedule",
       headers,
       stringify(schedule));
   AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
-
-  // Speed up the test by not waiting until the next allocation.
-  driver.reviveOffers();
 
   // Wait for some offers.
   AWAIT_READY(unavailabilityOffers);
@@ -388,7 +398,9 @@ TEST_F(MasterMaintenanceTest, PendingUnavailabilityTest)
   // Check that each offer has an unavailability.
   foreach (const Offer& offer, unavailabilityOffers.get()) {
     EXPECT_TRUE(offer.has_unavailability());
-    EXPECT_EQ(startTime.secs(), offer.unavailability().start());
+    EXPECT_EQ(
+        startTime,
+        Duration::create(offer.unavailability().start()).get());
   }
 
   driver.stop();

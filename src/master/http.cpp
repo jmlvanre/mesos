@@ -1423,8 +1423,7 @@ Future<Response> Master::Http::_maintenanceSchedule(
   foreach (const mesos::maintenance::Window& window, schedule.windows()) {
     foreach (const MachineInfo& machine, window.machines()) {
       master->maintenanceStatuses[machine].mode = mesos::maintenance::DRAINING;
-      master->maintenanceStatuses[machine].unavailability =
-        window.unavailability();
+      master->updateUnavailability(machine, window.unavailability());
     }
   }
 
@@ -1434,7 +1433,7 @@ Future<Response> Master::Http::_maintenanceSchedule(
       continue;
     }
 
-    master->maintenanceStatuses.erase(machine);
+    master->updateUnavailability(machine, None());
   }
 
   // Replace the old schedule(s) with the new schedule.

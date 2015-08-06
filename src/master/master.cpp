@@ -3826,6 +3826,25 @@ void Master::reregisterSlave(
     // based authentication).
     LOG(INFO) << "Re-registering slave " << *slave;
 
+    // We don't allow re-registering this way with a different ip or
+    // hostname. This is because maintenance is scheduled at the
+    // machine level; so we would need to re-validate the slave's
+    // unavailability if the machine it is running on changed.
+    if (slave->pid.address.ip != from.address.ip ||
+        slave->info.hostname() != slaveInfo.hostname()) {
+      LOG(WARNING) << "Slave " << slaveInfo.id() << " at " << from
+                 << " (" << slaveInfo.hostname() << ") attempted to "
+                 << "re-register with different ip / hostname; expected "
+                 << slave->pid.address.ip << " (" << slave->info.hostname()
+                 << ") shutting it down";
+
+      ShutdownMessage message;
+      message.set_message(
+          "Slave attempted to re-register with different ip / hostname");
+      send(from, message);
+      return;
+    }
+
     // Update the slave pid and relink to it.
     // NOTE: Re-linking the slave here always rather than only when
     // the slave is disconnected can lead to multiple exited events
@@ -4087,6 +4106,70 @@ void Master::updateSlave(
 
   // Now, update the allocator with the new estimate.
   allocator->updateSlave(slaveId, oversubscribedResources);
+}
+
+
+Nothing Master::updateUnavailability(
+    const MachineInfo& machineInfo,
+    const Option<Unavailability>& unavailability)
+{
+  if (unavailability.isSome()) {
+    maintenanceStatuses[machineInfo].unavailability = unavailability.get();
+  } else {
+    maintenanceStatuses.erase(machineInfo);
+  }
+
+  // TODO(jmlvanre): Only update allocator and rescind offers if the
+  // unavailability has actually changed.
+  if (machineInfos.contains(machineInfo)) {
+    // For every slave on this machine, update the allocator.
+    foreach (const SlaveID& slaveId, machineInfos[machineInfo]) {
+      // The slave should not be in the machines mapping if it is
+      // removed.
+      CHECK(slaves.removed.get(slaveId).isNone());
+
+      // The slave should be registered if it is in the machines
+      // mapping.
+      CHECK(slaves.registered.contains(slaveId));
+
+      Slave* slave = CHECK_NOTNULL(slaves.registered.get(slaveId));
+
+      if (unavailability.isSome()) {
+        // TODO(jmlvanre): Add stream operator for unavailability.
+        Try<Time> start = Time::create(unavailability.get().start());
+        CHECK_SOME(start);
+
+        LOG(INFO) << "Updating unavailability of slave " << *slave
+                  << ", starting at " << start.get();
+      } else {
+        LOG(INFO) << "Removing unavailability of slave " << *slave;
+      }
+
+      slave->unavailability = unavailability;
+
+      // Remove and rescind offers since we want to inform frameworks
+      // of the unavailability change as soon as possible.
+      foreach (Offer* offer, utils::copy(slave->offers)) {
+        allocator->recoverResources(
+            offer->framework_id(), slave->id, offer->resources(), None());
+
+        removeOffer(offer, true); // Rescind!
+      }
+
+      // We remove / resind all the offers first so that any calls to
+      // the allocator to modify its internal state are queued before
+      // the update of the unavailability in the allocator. We do this
+      // so that the allocator's state can start from a "clean slate"
+      // for the new unavailability.
+      // Note: Any calls from the Allocator back into the master, for
+      // example `offer()`, are guaranteed to happen after this
+      // function exits due to the Actor pattern.
+
+      allocator->updateUnavailability(slaveId, unavailability);
+    }
+  }
+
+  return Nothing();
 }
 
 
