@@ -70,6 +70,7 @@ message Event {
   // resources are considered allocated to the scheduler.
   message Offers {
     repeated Offer offers = 1;
+    repeated InverseOffer inverse_offers = 2;
   }
 
   // Received when a particular offer is no longer valid (e.g., the
