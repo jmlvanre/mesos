@@ -893,6 +893,37 @@ message Offer {
 
 
 /**
+ * A request to return some resources occupied by a framework.
+ */
+message InverseOffer {
+  // This is the same OfferID as found in normal offers, which allows
+  // re-use of some of the OfferID-only messages.
+  required OfferID id = 1;
+
+  // URL for reaching the agent running on the host.
+  optional URL url = 2;
+
+  // The framework that should release its resources.
+  // If no specifics are provided (i.e. which agent), all the framework's
+  // resources are requested back.
+  required FrameworkID framework_id = 3;
+
+  // Specified if the resources need to be released from a particular agent.
+  // All the framework's resources on this agent are requested back.
+  optional AgentID agent_id = 4;
+
+  // This InverseOffer represents a planned unavailability event in the
+  // specified window.  Any tasks running on the given framework or agent
+  // may be killed when the window arrives.
+  required Unavailability unavailability = 5;
+
+  // TODO(josephw): Add additional options for narrowing down the resources
+  // being requested back.  Such as a list of "Resource"s,
+  // specific executors, specific tasks, etc.
+}
+
+
+/**
  * Describes a task. Passed from the scheduler all the way to an
  * executor (see SchedulerDriver::launchTasks and
  * Executor::launchTask). Either ExecutorInfo or CommandInfo should be set.

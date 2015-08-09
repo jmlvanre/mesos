@@ -168,6 +168,7 @@ message ResourceRequestMessage {
 message ResourceOffersMessage {
   repeated Offer offers = 1;
   repeated string pids = 2;
+  repeated InverseOffer inverse_offers = 3;
 }
 
 
