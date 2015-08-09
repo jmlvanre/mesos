@@ -153,6 +153,11 @@ public:
       const SlaveID& slaveId,
       const Option<Unavailability>& unavailability);
 
+  void updateInverseOffer(
+      const SlaveID& slaveId,
+      const FrameworkID& frameworkId,
+      const Option<mesos::master::InverseOfferResponse>& response);
+
   void recoverResources(
       const FrameworkID& frameworkId,
       const SlaveID& slaveId,
@@ -855,6 +860,48 @@ HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::updateUnavailability(
     None();
 
   allocate(slaveId);
+}
+
+
+template <class RoleSorter, class FrameworkSorter>
+void
+HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::updateInverseOffer(
+    const SlaveID& slaveId,
+    const FrameworkID& frameworkId,
+    const Option<mesos::master::InverseOfferResponse>& offerResponse)
+{
+  CHECK(initialized);
+  CHECK(frameworks.contains(frameworkId));
+  CHECK(slaves.contains(slaveId));
+  CHECK(slaves[slaveId].unavailabilityStatus.isSome());
+  CHECK(slaves[slaveId].unavailabilityStatus.get().responses.
+        contains(frameworkId));
+
+  typename Slave::UnavailabilityStatus::Response& response =
+    slaves[slaveId].unavailabilityStatus.get().responses[frameworkId];
+
+  // We shouldn't be updating an inverse offer if we didn't send one out.
+  CHECK(response.offerOutstanding);
+
+  // We always set the `offerOutstanding` back to false so that we
+  // will send a new offer out the next time we schedule inverse
+  // offers.
+  response.offerOutstanding = false;
+
+  // If the response is none, this means the framework never
+  // responded. This is because the inverse offer timed out or was
+  // rescinded.
+  if (offerResponse.isNone()) {
+    return;
+  }
+
+  // For now we don't allow frameworks to respond with `UNKNOWN`. The
+  // caller should guard against this.
+  CHECK_NE(offerResponse.get().status(),
+           mesos::master::InverseOfferResponse::UNKNOWN);
+
+  // If the framework responded, we update our state to match.
+  response.response.CopyFrom(offerResponse.get());
 }
 
 

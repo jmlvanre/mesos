@@ -144,6 +144,11 @@ public:
       const SlaveID& slaveId,
       const Option<Unavailability>& unavailability) = 0;
 
+  virtual void updateInverseOffer(
+      const SlaveID& slaveId,
+      const FrameworkID& frameworkId,
+      const Option<InverseOfferResponse>& response) = 0;
+
   // Informs the Allocator to recover resources that are considered
   // used by the framework.
   virtual void recoverResources(
