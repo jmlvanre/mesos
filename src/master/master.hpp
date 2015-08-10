@@ -28,6 +28,7 @@
 
 #include <boost/circular_buffer.hpp>
 
+#include <mesos/maintenance/maintenance.hpp>
 #include <mesos/mesos.hpp>
 #include <mesos/resources.hpp>
 #include <mesos/scheduler/scheduler.hpp>
@@ -887,6 +888,12 @@ private:
   const Option<Authorizer*> authorizer;
 
   MasterInfo info_;
+
+  // Holds the maintenance info of each machine scheduled for maintenance.
+  hashmap<MachineInfo, MaintenanceInfo> maintenanceStatuses;
+
+  // Holds the maintenance schedule, as given by the operator.
+  std::list<mesos::maintenance::Schedule> maintenanceSchedules;
 
   // Indicates when recovery is complete. Recovery begins once the
   // master is elected as a leader.

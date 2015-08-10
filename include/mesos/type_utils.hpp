@@ -143,6 +143,13 @@ inline bool operator==(const TaskID& left, const std::string& right)
 }
 
 
+inline bool operator==(const MachineInfo& left, const MachineInfo& right)
+{
+  return left.hostname() == right.hostname() &&
+      left.ip() == right.ip();
+}
+
+
 inline bool operator!=(const ContainerID& left, const ContainerID& right)
 {
   return left.value() != right.value();
@@ -264,6 +271,15 @@ inline std::size_t hash_value(const TaskID& taskId)
 {
   size_t seed = 0;
   boost::hash_combine(seed, taskId.value());
+  return seed;
+}
+
+
+inline std::size_t hash_value(const MachineInfo& machine)
+{
+  size_t seed = 0;
+  boost::hash_combine(seed, machine.hostname());
+  boost::hash_combine(seed, machine.ip());
   return seed;
 }
 

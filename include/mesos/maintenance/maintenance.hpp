@@ -22,4 +22,20 @@
 // ONLY USEFUL AFTER RUNNING PROTOC.
 #include <mesos/maintenance/maintenance.pb.h>
 
+
+namespace mesos {
+
+// Holds the unavailability window and maintenance mode (for a single machine).
+struct MaintenanceInfo {
+  MaintenanceInfo() {}
+
+  MaintenanceInfo(const Unavailability& _unavailability)
+    : unavailability(_unavailability) {}
+
+  Unavailability unavailability;
+  mesos::maintenance::Mode mode;
+};
+
+} // namespace mesos {
+
 #endif // __MAINTENANCE_PROTO_HPP__
