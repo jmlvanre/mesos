@@ -39,6 +39,7 @@
 
 #include <stout/base64.hpp>
 #include <stout/foreach.hpp>
+#include <stout/hashset.hpp>
 #include <stout/json.hpp>
 #include <stout/lambda.hpp>
 #include <stout/net.hpp>
@@ -88,6 +89,7 @@ using process::http::UnsupportedMediaType;
 
 using process::metrics::internal::MetricsProcess;
 
+using std::list;
 using std::map;
 using std::string;
 using std::vector;
@@ -1516,6 +1518,115 @@ Future<Response> Master::Http::_maintenanceStart(
   // Update the master's local state with the deactivated machines.
   foreach (const MachineInfo& machine, machines.machines()) {
     master->maintenanceStatuses[machine].mode = mesos::maintenance::DEACTIVATED;
+  }
+
+  return OK();
+}
+
+
+// /master/maintenance/start endpoint help.
+const string Master::Http::MAINTENANCE_STOP_HELP = HELP(
+    TLDR(
+      "Stops maintenance on a set of machines."),
+    USAGE(
+      "/master/maintenance.stop"),
+    DESCRIPTION(
+      "POST: Validates the request body as JSON and transitions",
+      "  the list of machines into Normal mode.  This also removes",
+      "  the list of machines from the maintenance schedule."));
+
+
+// /master/maintenance/start endpoint handler.
+Future<Response> Master::Http::maintenanceStop(const Request& request) const
+{
+  if (request.method != "POST") {
+    return BadRequest("Expecting POST.");
+  }
+
+  // Parse the POST body as JSON.
+  Try<JSON::Object> jsonMachines = JSON::parse<JSON::Object>(request.body);
+  if (jsonMachines.isError()) {
+    return BadRequest(jsonMachines.error());
+  }
+
+  // Convert the machines to a protobuf.
+  Try<MachineInfos> machines =
+    ::protobuf::parse<MachineInfos>(jsonMachines.get());
+  if (machines.isError()) {
+    return BadRequest(machines.error());
+  }
+
+  // Validate that the list contains at least one entry.
+  Try<Nothing> isValid = maintenance::validation::machines(machines.get());
+  if (isValid.isError()) {
+    return BadRequest(isValid.error());
+  }
+
+  // Check that all machines are part of a maintenance schedule.
+  foreach (const MachineInfo& machine, machines.get().machines()) {
+    if (!master->maintenanceStatuses.contains(machine)) {
+      return BadRequest("Machine " + machine.DebugString() +
+        " is not part of a maintenance schedule.");
+    }
+    if (master->maintenanceStatuses[machine].mode !=
+        mesos::maintenance::DEACTIVATED) {
+      return BadRequest("Machine " + machine.DebugString() +
+        " is not in Deactivated mode and cannot be reactivated.");
+    }
+  }
+
+  // Defer a response until after the registry is up to date.
+  lambda::function<Future<Response>(bool)> continuation =
+    lambda::bind(&Master::Http::_maintenanceStop,
+      this,
+      machines.get(),
+      lambda::_1);
+
+  return master->registrar->apply(Owned<Operation>(
+      new maintenance::StopMaintenance(machines.get())))
+    .then(defer(master->self(), continuation));
+
+  return OK();
+}
+
+
+Future<Response> Master::Http::_maintenanceStop(
+    const MachineInfos& machines,
+    bool operationResult) const
+{
+  // Update the master's local state with the reactivated machines.
+  hashset<MachineInfo> machineSet;
+  foreach (const MachineInfo& machine, machines.machines()) {
+    master->maintenanceStatuses.erase(machine);
+    machineSet.insert(machine);
+  }
+
+  // Delete the machines from the schedule.
+  for (list<mesos::maintenance::Schedule>::iterator schedule =
+      master->maintenanceSchedules.begin();
+      schedule != master->maintenanceSchedules.end();
+      ++schedule) {
+
+    for (int j = schedule->windows().size() - 1; j >= 0; j--) {
+      mesos::maintenance::Window* window = schedule->mutable_windows(j);
+
+      // Delete individual machines.
+      for (int k = window->machines().size() - 1; k >= 0; k--) {
+        if (machineSet.contains(window->machines(k))) {
+          window->mutable_machines()->DeleteSubrange(k, 1);
+        }
+      }
+
+      // If the resulting window is empty, delete it.
+      if (window->machines().size() == 0) {
+        schedule->mutable_windows()->DeleteSubrange(j, 1);
+      }
+    }
+
+    // If the resulting schedule is empty, delete it.
+    if (schedule->windows().size() == 0) {
+      master->maintenanceSchedules.erase(schedule);
+    }
   }
 
   return OK();

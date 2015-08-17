@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 
+#include <mesos/maintenance/maintenance.hpp>
 #include <mesos/scheduler/scheduler.hpp>
 
 #include <process/future.hpp>
@@ -32,6 +33,7 @@
 #include <stout/json.hpp>
 #include <stout/net.hpp>
 #include <stout/option.hpp>
+#include <stout/protobuf.hpp>
 #include <stout/try.hpp>
 #include <stout/strings.hpp>
 #include <stout/stringify.hpp>
@@ -331,6 +333,136 @@ TEST_F(MasterMaintenanceTest, DeactivateMachines)
       headers,
       stringify(window2));
   AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+}
+
+
+// Posts valid and invalid machines to the maintenance stop endpoint.
+TEST_F(MasterMaintenanceTest, ReactivateMachines)
+{
+  // Set up a master.
+  Try<PID<Master>> master = StartMaster();
+  ASSERT_SOME(master);
+
+  // Header for all the POST's in this test.
+  hashmap<string, string> headers;
+  headers["Content-Type"] = "application/json";
+
+  // JSON machines used in this test.
+  JSON::Object machine1;
+  machine1.values["hostname"] = "Machine1";
+
+  JSON::Object machine2;
+  machine2.values["ip"] = "0.0.0.2";
+
+  JSON::Object machine3;
+  machine3.values["hostname"] = "Machine3";
+  machine3.values["ip"] = "0.0.0.3";
+
+  // JSON arrays of machines used in this test.
+  JSON::Array machines12;
+  machines12.values.push_back(machine2);
+  machines12.values.push_back(machine1);
+
+  JSON::Array machines3;
+  machines3.values.push_back(machine3);
+
+  // JSON windows (or MachineInfos) used in this test.
+  JSON::Object window12;
+  window12.values["machines"] = machines12;
+
+  JSON::Object window3;
+  window3.values["machines"] = machines3;
+
+  // JSON schedule used in this test.
+  JSON::Object validSchedule123;
+  JSON::Array validWindows123;
+  validWindows123.values.push_back(window12);
+  validWindows123.values.push_back(window3);
+  validSchedule123.values["windows"] = validWindows123;
+
+  // -- Start of the test. --
+
+  // Try to stop maintenance on an unscheduled machine.
+  Future<Response> response =
+    process::http::post(master.get(),
+      "maintenance.stop",
+      headers,
+      stringify(window12));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(BadRequest().status, response);
+
+  // Post a valid schedule with three machines.
+  response =
+    process::http::post(master.get(),
+      "maintenance.schedule",
+      headers,
+      stringify(validSchedule123));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Try to stop maintenance on a Draining machine.
+  response =
+    process::http::post(master.get(),
+      "maintenance.stop",
+      headers,
+      stringify(window12));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(BadRequest().status, response);
+
+  // Deactivate machine3.
+  response =
+    process::http::post(master.get(),
+      "maintenance.start",
+      headers,
+      stringify(window3));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Reactivate machine3.
+  response =
+    process::http::post(master.get(),
+      "maintenance.stop",
+      headers,
+      stringify(window3));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Get the maintenance schedule.
+  response =
+    process::http::get(master.get(),
+      "maintenance.schedule");
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Check that only one maintenance window remains.
+  Try<JSON::Object> masterBlob =
+    JSON::parse<JSON::Object>(response.get().body);
+  Try<mesos::maintenance::Schedule> masterSchedule =
+    ::protobuf::parse<mesos::maintenance::Schedule>(masterBlob.get());
+  ASSERT_EQ(1, masterSchedule.get().windows().size());
+  ASSERT_EQ(2, masterSchedule.get().windows(0).machines().size());
+
+  // Deactivate the other machines.
+  response =
+    process::http::post(master.get(),
+      "maintenance.start",
+      headers,
+      stringify(window12));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Reactivate the other machines.
+  response =
+    process::http::post(master.get(),
+      "maintenance.stop",
+      headers,
+      stringify(window12));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Get the maintenance schedule again.
+  response =
+    process::http::get(master.get(),
+      "maintenance.schedule");
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Check that the schedule is empty.
+  masterBlob = JSON::parse<JSON::Object>(response.get().body);
+  masterSchedule =
+    ::protobuf::parse<mesos::maintenance::Schedule>(masterBlob.get());
+  ASSERT_EQ(0, masterSchedule.get().windows().size());
 }
 
 } // namespace tests {

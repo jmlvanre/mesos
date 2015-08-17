@@ -74,6 +74,27 @@ private:
   hashset<MachineInfo> machines;
 };
 
+
+// Transitions a group of machines from Deactivated mode into
+// Normal mode.  All machines must be in Deactivated mode and must
+// be part of a schedule prior to executing this operation.
+// The machines will be removed from the maintenance schedule.
+class StopMaintenance : public Operation
+{
+public:
+  explicit StopMaintenance(
+      const MachineInfos& _machines);
+
+protected:
+  Try<bool> perform(
+      Registry* registry,
+      hashset<SlaveID>* slaveIDs,
+      bool strict);
+
+private:
+  hashset<MachineInfo> machines;
+};
+
 namespace validation {
 
 // Performs the following checks on the new maintenance schedule:

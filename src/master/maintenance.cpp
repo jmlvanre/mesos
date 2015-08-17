@@ -137,6 +137,63 @@ Try<bool> StartMaintenance::perform(
   return changed;
 }
 
+
+StopMaintenance::StopMaintenance(
+    const MachineInfos& _machines)
+{
+  foreach (const MachineInfo& machine, _machines.machines()) {
+    machines.insert(machine);
+  }
+}
+
+
+Try<bool> StopMaintenance::perform(
+    Registry* registry,
+    hashset<SlaveID>* slaveIDs,
+    bool strict)
+{
+  // Delete the maintenance status of all targeted machines.
+  // i.e. Transition them into normal mode.
+  bool changed = false;
+  for (int i = registry->statuses().size() - 1; i >= 0; i--) {
+    const Registry::MaintenanceStatus& status = registry->statuses(i);
+
+    if (machines.contains(status.id())) {
+      registry->mutable_statuses()->DeleteSubrange(i, 1);
+
+      changed = true; // Mutation.
+    }
+  }
+
+  // Delete the machines from the schedule.
+  for (int i = registry->schedules().size() - 1; i >= 0; i--) {
+    maintenance::Schedule* schedule = registry->mutable_schedules(i);
+
+    for (int j = schedule->windows().size() - 1; j >= 0; j--) {
+      maintenance::Window* window = schedule->mutable_windows(j);
+
+      // Delete individual machines.
+      for (int k = window->machines().size() - 1; k >= 0; k--) {
+        if (machines.contains(window->machines(k))) {
+          window->mutable_machines()->DeleteSubrange(k, 1);
+        }
+      }
+
+      // If the resulting window is empty, delete it.
+      if (window->machines().size() == 0) {
+        schedule->mutable_windows()->DeleteSubrange(j, 1);
+      }
+    }
+
+    // If the resulting schedule is empty, delete it.
+    if (schedule->windows().size() == 0) {
+      registry->mutable_schedules()->DeleteSubrange(i, 1);
+    }
+  }
+
+  return changed;
+}
+
 namespace validation {
 
 Try<Nothing> schedule(
