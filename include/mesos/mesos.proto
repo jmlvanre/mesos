@@ -120,6 +120,19 @@ message URL {
 
 
 /**
+ * Represents a range of time from a given start point to a given end point.
+ */
+message Unavailability {
+  // Time, in seconds since the Epoch.
+  required double start = 1;
+
+  // Duration, in seconds.  When added to "start", this represents the end
+  // of the period.  If unspecified, the duration is assumed to be infinite.
+  optional double duration = 2;
+}
+
+
+/**
  * Describes a framework.
  */
 message FrameworkInfo {
@@ -836,6 +849,16 @@ message Offer {
   repeated Attribute attributes = 7;
   repeated ExecutorID executor_ids = 6;
 
+  // Signifies that the resources in this Offer will be unavailable during
+  // the given interval.  Any tasks launched using these resources may be
+  // killed when the window arrives.  For example, these resources may be
+  // part of a planned maintenance schedule.
+  // Note: This field only provides information about a planned
+  // unavailability.  The unavailability period may not necessarily start
+  // at exactly this interval, nor last for exactly the duration of
+  // this interval.  The unavailability may also be forever!
+  optional Unavailability unavailability = 9;
+
   // Defines an operation that can be performed against offers.
   message Operation {
     enum Type {
@@ -873,6 +896,37 @@ message Offer {
     optional Create create = 5;
     optional Destroy destroy = 6;
   }
+}
+
+
+/**
+ * A request to return some resources occupied by a framework.
+ */
+message InverseOffer {
+  // This is the same OfferID as found in normal offers, which allows
+  // re-use of some of the OfferID-only messages.
+  required OfferID id = 1;
+
+  // URL for reaching the slave running on the host.
+  optional URL url = 2;
+
+  // The framework that should release its resources.
+  // If no specifics are provided (i.e. which slave), all the framework's
+  // resources are requested back.
+  required FrameworkID framework_id = 3;
+
+  // Specified if the resources need to be released from a particular slave.
+  // All the framework's resources on this slave are requested back.
+  optional SlaveID slave_id = 4;
+
+  // This InverseOffer represents a planned unavailability event in the
+  // specified window.  Any tasks running on the given framework or slave
+  // may be killed when the window arrives.
+  required Unavailability unavailability = 5;
+
+  // TODO(josephw): Add additional options for narrowing down the resources
+  // being requested back.  Such as a list of "Resource"s,
+  // specific executors, specific tasks, etc.
 }
 
 
