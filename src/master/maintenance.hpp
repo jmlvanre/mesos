@@ -54,6 +54,26 @@ private:
   const mesos::maintenance::Schedule schedule;
 };
 
+
+// Transitions a group of machines from Draining mode into
+// Deactivated mode.  All machines must be part of a maintenance
+// schedule prior to executing this operation.
+class StartMaintenance : public Operation
+{
+public:
+  explicit StartMaintenance(
+      const MachineInfos& _machines);
+
+protected:
+  Try<bool> perform(
+      Registry* registry,
+      hashset<SlaveID>* slaveIDs,
+      bool strict);
+
+private:
+  hashset<MachineInfo> machines;
+};
+
 namespace validation {
 
 // Performs the following checks on the new maintenance schedule:
@@ -70,6 +90,13 @@ Try<Nothing> schedule(
 // Checks that the start and duration of the object are non-negative numbers.
 Try<Nothing> unavailability(
     const Unavailability& interval);
+
+
+// Performs the following checks on a list of machines:
+// * Each machine appears in the list once and only once.
+// * The list is non-empty.
+// * All checks in the "machine" method below.
+Try<Nothing> machines(MachineInfos& machines);
 
 
 // Performs the following checks on a single machine:

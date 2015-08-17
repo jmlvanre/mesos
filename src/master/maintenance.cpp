@@ -106,6 +106,37 @@ Try<bool> UpdateSchedule::perform(
 }
 
 
+StartMaintenance::StartMaintenance(
+    const MachineInfos& _machines)
+{
+  foreach (const MachineInfo& machine, _machines.machines()) {
+    machines.insert(machine);
+  }
+}
+
+
+Try<bool> StartMaintenance::perform(
+    Registry* registry,
+    hashset<SlaveID>* slaveIDs,
+    bool strict)
+{
+  // Flip the mode of all targeted machines.
+  bool changed = false;
+  for (int i = 0; i < registry->statuses().size(); i++) {
+    const Registry::MaintenanceStatus& status = registry->statuses(i);
+
+    if (machines.contains(status.id())) {
+      // Flip the mode.
+      registry->mutable_statuses()->Mutable(i)
+        ->set_mode(maintenance::DEACTIVATED);
+
+      changed = true; // Mutation.
+    }
+  }
+
+  return changed;
+}
+
 namespace validation {
 
 Try<Nothing> schedule(
@@ -187,6 +218,38 @@ Try<Nothing> unavailability(const Unavailability& interval)
     return Error(durationed.error());
   }
 
+
+  return Nothing();
+}
+
+
+Try<Nothing> machines(MachineInfos& machines)
+{
+  if (machines.machines().size() <= 0) {
+    return Error("List of machines is empty.");
+  }
+
+  // Verify that the machine has at least one non-empty field value.
+  hashset<MachineInfo> uniques;
+  for (int i = 0; i < machines.machines().size(); i++) {
+    const MachineInfo& machine = machines.machines(i);
+
+    // Validate the single machine.
+    // This has the desired side effect of lowercasing the hostname.
+    Try<Nothing> validMachine =
+      validation::machine(machines.mutable_machines(i));
+    if (validMachine.isError()) {
+      return Error(validMachine.error());
+    }
+
+    // Check machine uniqueness.
+    if (uniques.contains(machine)) {
+      return Error("Machine " + machine.DebugString() +
+          " appears more than once in the schedule");
+    }
+
+    uniques.insert(machine);
+  }
 
   return Nothing();
 }

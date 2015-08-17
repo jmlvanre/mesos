@@ -839,6 +839,13 @@ private:
         const mesos::maintenance::Schedule& schedule,
         bool operationResult) const;
 
+    // /master/maintenance/start
+    process::Future<process::http::Response> maintenanceStart(
+        const process::http::Request& request) const;
+    process::Future<process::http::Response> _maintenanceStart(
+        const MachineInfos& machines,
+        bool operationResult) const;
+
     const static std::string SCHEDULER_HELP;
     const static std::string HEALTH_HELP;
     const static std::string OBSERVE_HELP;
@@ -850,6 +857,7 @@ private:
     const static std::string STATESUMMARY_HELP;
     const static std::string TASKS_HELP;
     const static std::string MAINTENANCE_SCHEDULE_HELP;
+    const static std::string MAINTENANCE_START_HELP;
 
   private:
     // Helper for doing authentication, returns the credential used if

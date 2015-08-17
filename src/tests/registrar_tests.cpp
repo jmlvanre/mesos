@@ -465,6 +465,79 @@ TEST_P(RegistrarTest, UpdateMaintenanceSchedule)
 }
 
 
+// Creates a schedule and properly starts maintenance.
+TEST_P(RegistrarTest, StartMaintenance)
+{
+  // Machine definitions used in this test.
+  MachineInfo mach1;
+  mach1.set_ip("0.0.0.1");
+
+  MachineInfo mach2;
+  mach2.set_hostname("2");
+
+  MachineInfo mach3;
+  mach3.set_hostname("3");
+  mach3.set_ip("0.0.0.3");
+
+  {
+    // Prepare the registrar.
+    Registrar registrar(flags, state);
+    AWAIT_READY(registrar.recover(master));
+
+    // Schdule two machines for maintenance.
+    maintenance::Schedule schedule;
+    maintenance::Window* window = schedule.add_windows();
+    window->add_machines()->CopyFrom(mach1);
+    window->add_machines()->CopyFrom(mach2);
+    AWAIT_EQ(true, registrar.apply(
+      Owned<Operation>(new UpdateSchedule(schedule))));
+
+    // Transition machine two into Deactivated mode.
+    MachineInfos machines;
+    machines.add_machines()->CopyFrom(mach2);
+    AWAIT_EQ(true, registrar.apply(
+      Owned<Operation>(new StartMaintenance(machines))));
+  }
+
+  {
+    // Check that machine two is deactivated.
+    Registrar registrar(flags, state);
+    Future<Registry> registry = registrar.recover(master);
+    AWAIT_READY(registry);
+    EXPECT_EQ(2, registry.get().statuses().size());
+    EXPECT_EQ(maintenance::DRAINING, registry.get().statuses(0).mode());
+    EXPECT_EQ(maintenance::DEACTIVATED, registry.get().statuses(1).mode());
+
+    // Schdule three machines for maintenance.
+    maintenance::Schedule schedule;
+    maintenance::Window* window = schedule.add_windows();
+    window->add_machines()->CopyFrom(mach1);
+    window->add_machines()->CopyFrom(mach2);
+    window->add_machines()->CopyFrom(mach3);
+    AWAIT_EQ(true, registrar.apply(
+      Owned<Operation>(new UpdateSchedule(schedule))));
+
+    // Deactivate the two Draining machines.
+    MachineInfos machines;
+    machines.add_machines()->CopyFrom(mach1);
+    machines.add_machines()->CopyFrom(mach3);
+    AWAIT_EQ(true, registrar.apply(
+      Owned<Operation>(new StartMaintenance(machines))));
+  }
+
+  {
+    // Check that all machines are deactivated.
+    Registrar registrar(flags, state);
+    Future<Registry> registry = registrar.recover(master);
+    AWAIT_READY(registry);
+    EXPECT_EQ(3, registry.get().statuses().size());
+    EXPECT_EQ(maintenance::DEACTIVATED, registry.get().statuses(0).mode());
+    EXPECT_EQ(maintenance::DEACTIVATED, registry.get().statuses(1).mode());
+    EXPECT_EQ(maintenance::DEACTIVATED, registry.get().statuses(2).mode());
+  }
+}
+
+
 TEST_P(RegistrarTest, Bootstrap)
 {
   // Run 1 readmits a slave that is not present.

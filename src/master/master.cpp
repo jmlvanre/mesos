@@ -821,6 +821,12 @@ void Master::initialize()
           Http::log(request);
           return http.maintenanceSchedule(request);
         });
+  route("/maintenance.start",
+        Http::MAINTENANCE_START_HELP,
+        [http](const process::http::Request& request) {
+          Http::log(request);
+          return http.maintenanceStart(request);
+        });
 
   // Provide HTTP assets from a "webui" directory. This is either
   // specified via flags (which is necessary for running out of the

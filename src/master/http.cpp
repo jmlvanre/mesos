@@ -1444,6 +1444,84 @@ Future<Response> Master::Http::_maintenanceSchedule(
 }
 
 
+// /master/maintenance/start endpoint help.
+const string Master::Http::MAINTENANCE_START_HELP = HELP(
+    TLDR(
+      "Starts maintenance on a set of machines."),
+    USAGE(
+      "/master/maintenance.start"),
+    DESCRIPTION(
+      "POST: Validates the request body as JSON and transitions",
+      "  the list of machines into Deactivated mode."));
+
+
+// /master/maintenance/start endpoint handler.
+Future<Response> Master::Http::maintenanceStart(const Request& request) const
+{
+  if (request.method != "POST") {
+    return BadRequest("Expecting POST.");
+  }
+
+  // Parse the POST body as JSON.
+  Try<JSON::Object> jsonMachines = JSON::parse<JSON::Object>(request.body);
+  if (jsonMachines.isError()) {
+    return BadRequest(jsonMachines.error());
+  }
+
+  // Convert the machines to a protobuf.
+  Try<MachineInfos> machines =
+    ::protobuf::parse<MachineInfos>(jsonMachines.get());
+  if (machines.isError()) {
+    return BadRequest(machines.error());
+  }
+
+  // Validate that the list contains at least one entry.
+  Try<Nothing> isValid = maintenance::validation::machines(machines.get());
+  if (isValid.isError()) {
+    return BadRequest(isValid.error());
+  }
+
+  // Check that all machines are part of a maintenance schedule.
+  foreach (const MachineInfo& machine, machines.get().machines()) {
+    if (!master->maintenanceStatuses.contains(machine)) {
+      return BadRequest("Machine " + machine.DebugString() +
+        " is not part of a maintenance schedule.");
+    }
+    if (master->maintenanceStatuses[machine].mode !=
+        mesos::maintenance::DRAINING) {
+      return BadRequest("Machine " + machine.DebugString() +
+        " is not in Draining mode and cannot be deactivated.");
+    }
+  }
+
+  // Defer a response until after the registry is up to date.
+  lambda::function<Future<Response>(bool)> continuation =
+    lambda::bind(&Master::Http::_maintenanceStart,
+      this,
+      machines.get(),
+      lambda::_1);
+
+  return master->registrar->apply(Owned<Operation>(
+      new maintenance::StartMaintenance(machines.get())))
+    .then(defer(master->self(), continuation));
+
+  return OK();
+}
+
+
+Future<Response> Master::Http::_maintenanceStart(
+    const MachineInfos& machines,
+    bool operationResult) const
+{
+  // Update the master's local state with the deactivated machines.
+  foreach (const MachineInfo& machine, machines.machines()) {
+    master->maintenanceStatuses[machine].mode = mesos::maintenance::DEACTIVATED;
+  }
+
+  return OK();
+}
+
+
 Result<Credential> Master::Http::authenticate(const Request& request) const
 {
   // By default, assume everyone is authenticated if no credentials
