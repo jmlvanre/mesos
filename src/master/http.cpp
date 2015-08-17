@@ -1633,6 +1633,54 @@ Future<Response> Master::Http::_maintenanceStop(
 }
 
 
+// /master/maintenance/status endpoint help.
+const string Master::Http::MAINTENANCE_STATUS_HELP = HELP(
+    TLDR(
+      "Retrieves the maintenance status of the cluster."),
+    USAGE(
+      "/master/maintenance.status"),
+    DESCRIPTION(
+      "Returns an object with one list of machines per maintenance mode."));
+
+
+// /master/maintenance/status endpoint handler.
+Future<Response> Master::Http::maintenanceStatus(const Request& request) const
+{
+  if (request.method != "GET") {
+    return BadRequest("Expecting GET");
+  }
+
+  // Unwrap the master's maintenance status information
+  // into two arrays of machines.
+  JSON::Array draining;
+  JSON::Array deactivated;
+  foreachkey (const MachineInfo& machine, master->maintenanceStatuses) {
+    JSON::Object jsonMach = JSON::Protobuf(machine);
+    switch(master->maintenanceStatuses[machine].mode) {
+      case mesos::maintenance::DRAINING:
+        draining.values.push_back(jsonMach);
+        break;
+
+      case mesos::maintenance::DEACTIVATED:
+        deactivated.values.push_back(jsonMach);
+        break;
+
+      // Currently, machines in normal mode do not have an entry in the
+      // maintenanceStatuses mapping.
+      case mesos::maintenance::NORMAL:
+      default:
+        break;
+    }
+  }
+
+  // Wrap up and return the machine arrays.
+  JSON::Object statuses;
+  statuses.values["draining"] = draining;
+  statuses.values["deactivated"] = deactivated;
+  return OK(statuses, request.query.get("jsonp"));
+}
+
+
 Result<Credential> Master::Http::authenticate(const Request& request) const
 {
   // By default, assume everyone is authenticated if no credentials

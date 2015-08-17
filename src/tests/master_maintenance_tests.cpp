@@ -211,6 +211,92 @@ TEST_F(MasterMaintenanceTest, UpdateSchedule)
 }
 
 
+// Tries to remove deactivated machines from the schedule.
+TEST_F(MasterMaintenanceTest, FailToUnscheduleDeactivatedMachines)
+{
+  // Set up a master.
+  Try<PID<Master>> master = StartMaster();
+  ASSERT_SOME(master);
+
+  // Header for all the POST's in this test.
+  hashmap<string, string> headers;
+  headers["Content-Type"] = "application/json";
+
+  // JSON machines used in this test.
+  JSON::Object machine1;
+  machine1.values["hostname"] = "Machine1";
+
+  JSON::Object machine2;
+  machine2.values["ip"] = "0.0.0.2";
+
+  // JSON arrays of machines used in this test.
+  JSON::Array machines1;
+  machines1.values.push_back(machine1);
+
+  JSON::Array machines2;
+  machines2.values.push_back(machine2);
+
+  JSON::Array machines12;
+  machines12.values.push_back(machine2);
+  machines12.values.push_back(machine1);
+
+  // JSON windows used in this test.
+  JSON::Object window1;
+  window1.values["machines"] = machines1;
+
+  JSON::Object window2;
+  window2.values["machines"] = machines2;
+
+  JSON::Object window12;
+  window12.values["machines"] = machines12;
+
+  // JSON schedules used in this test.
+  JSON::Object validSchedule12;
+  JSON::Array validWindows12;
+  validWindows12.values.push_back(window12);
+  validSchedule12.values["windows"] = validWindows12;
+
+  JSON::Object validSchedule2;
+  JSON::Array validWindows2;
+  validWindows2.values.push_back(window2);
+  validSchedule2.values["windows"] = validWindows2;
+
+  // -- Start of the test. --
+
+  // Schedule two machines.
+  Future<Response> response =
+    process::http::post(master.get(),
+      "maintenance.schedule",
+      headers,
+      stringify(validSchedule12));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Deactivate machine1.
+  response =
+    process::http::post(master.get(),
+      "maintenance.start",
+      headers,
+      stringify(window1));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Try to unschedule machine1.
+  response =
+    process::http::post(master.get(),
+      "maintenance.schedule",
+      headers,
+      stringify(validSchedule2));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(BadRequest().status, response);
+
+  // Reactivate machine1.
+  response =
+    process::http::post(master.get(),
+      "maintenance.stop",
+      headers,
+      stringify(window1));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+}
+
+
 // Posts valid and invalid machines to the maintenance start endpoint.
 TEST_F(MasterMaintenanceTest, DeactivateMachines)
 {
@@ -463,6 +549,115 @@ TEST_F(MasterMaintenanceTest, ReactivateMachines)
   masterSchedule =
     ::protobuf::parse<mesos::maintenance::Schedule>(masterBlob.get());
   ASSERT_EQ(0, masterSchedule.get().windows().size());
+}
+
+
+// Posts valid and invalid machines to the maintenance stop endpoint.
+TEST_F(MasterMaintenanceTest, MachineStatus)
+{
+  // Set up a master.
+  Try<PID<Master>> master = StartMaster();
+  ASSERT_SOME(master);
+
+  // Header for all the POST's in this test.
+  hashmap<string, string> headers;
+  headers["Content-Type"] = "application/json";
+
+  // JSON machines used in this test.
+  JSON::Object machine1;
+  machine1.values["hostname"] = "Machine1";
+
+  JSON::Object machine2;
+  machine2.values["ip"] = "0.0.0.2";
+
+  // JSON arrays of machines used in this test.
+  JSON::Array machines12;
+  machines12.values.push_back(machine2);
+  machines12.values.push_back(machine1);
+
+  JSON::Array machines1;
+  machines1.values.push_back(machine1);
+
+  // JSON windows (or MachineInfos) used in this test.
+  JSON::Object window12;
+  window12.values["machines"] = machines12;
+
+  JSON::Object window1;
+  window1.values["machines"] = machines1;
+
+  // JSON schedule used in this test.
+  JSON::Object validSchedule12;
+  JSON::Array validWindows12;
+  validWindows12.values.push_back(window12);
+  validSchedule12.values["windows"] = validWindows12;
+
+  // -- Start of the test. --
+
+  // Try to stop maintenance on an unscheduled machine.
+  Future<Response> response =
+    process::http::post(master.get(),
+      "maintenance.schedule",
+      headers,
+      stringify(validSchedule12));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Get the maintenance statuses.
+  response = process::http::get(master.get(), "maintenance.status");
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Check that both machines are draining.
+  Try<JSON::Object> statuses =
+    JSON::parse<JSON::Object>(response.get().body);
+  ASSERT_EQ(2,
+    statuses.get().values["draining"].as<JSON::Array>().values.size());
+  ASSERT_EQ(0,
+    statuses.get().values["deactivated"].as<JSON::Array>().values.size());
+
+  // Deactivate machine1.
+  response =
+    process::http::post(master.get(),
+      "maintenance.start",
+      headers,
+      stringify(window1));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Get the maintenance statuses.
+  response = process::http::get(master.get(), "maintenance.status");
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Check one machine is deactivated.
+  statuses = JSON::parse<JSON::Object>(response.get().body);
+  ASSERT_EQ(1,
+    statuses.get().values["draining"].as<JSON::Array>().values.size());
+  ASSERT_EQ(1,
+    statuses.get().values["deactivated"].as<JSON::Array>().values.size());
+  ASSERT_EQ("machine1",
+    statuses.get().values["deactivated"].as<JSON::Array>()
+      .values[0].as<JSON::Object>()
+      .values.find("hostname")->second.as<JSON::String>().value);
+
+  // Reactivate machine1.
+  response =
+    process::http::post(master.get(),
+      "maintenance.stop",
+      headers,
+      stringify(window1));
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Get the maintenance statuses.
+  response = process::http::get(master.get(), "maintenance.status");
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+
+  // Check that only one machine remains.
+  statuses = JSON::parse<JSON::Object>(response.get().body);
+  ASSERT_EQ(1,
+    statuses.get().values["draining"].as<JSON::Array>().values.size());
+  ASSERT_EQ(0,
+    statuses.get().values["deactivated"].as<JSON::Array>().values.size());
+  ASSERT_EQ("0.0.0.2",
+    statuses.get().values["draining"].as<JSON::Array>()
+      .values[0].as<JSON::Object>()
+      .values.find("ip")->second.as<JSON::String>().value);
 }
 
 } // namespace tests {

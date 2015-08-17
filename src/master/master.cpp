@@ -833,6 +833,12 @@ void Master::initialize()
           Http::log(request);
           return http.maintenanceStop(request);
         });
+  route("/maintenance.status",
+        Http::MAINTENANCE_STATUS_HELP,
+        [http](const process::http::Request& request) {
+          Http::log(request);
+          return http.maintenanceStatus(request);
+        });
 
   // Provide HTTP assets from a "webui" directory. This is either
   // specified via flags (which is necessary for running out of the

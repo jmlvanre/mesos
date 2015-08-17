@@ -853,6 +853,10 @@ private:
         const MachineInfos& machines,
         bool operationResult) const;
 
+    // /master/maintenance/status
+    process::Future<process::http::Response> maintenanceStatus(
+        const process::http::Request& request) const;
+
     const static std::string SCHEDULER_HELP;
     const static std::string HEALTH_HELP;
     const static std::string OBSERVE_HELP;
@@ -866,6 +870,7 @@ private:
     const static std::string MAINTENANCE_SCHEDULE_HELP;
     const static std::string MAINTENANCE_START_HELP;
     const static std::string MAINTENANCE_STOP_HELP;
+    const static std::string MAINTENANCE_STATUS_HELP;
 
   private:
     // Helper for doing authentication, returns the credential used if
