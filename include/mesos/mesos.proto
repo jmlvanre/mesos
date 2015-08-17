@@ -108,6 +108,23 @@ message Address {
 
 
 /**
+ * A single machine, which may hold one or more agents.
+ */
+message MachineInfo {
+  optional string hostname = 1;
+  optional string ip = 2;
+}
+
+
+/**
+ * A list of machines.
+ */
+message MachineInfos {
+  repeated MachineInfo machines = 1;
+}
+
+
+/**
  * Represents a URL.
  */
 message URL {

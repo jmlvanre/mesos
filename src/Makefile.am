@@ -153,6 +153,9 @@ EXECUTOR_PROTO =							\
 FETCHER_PROTO =								\
   $(top_srcdir)/include/mesos/fetcher/fetcher.proto
 
+MAINTENANCE_PROTO =							\
+  $(top_srcdir)/include/mesos/maintenance/maintenance.proto
+
 ALLOCATOR_PROTO =							\
   $(top_srcdir)/include/mesos/master/allocator.proto
 
@@ -184,6 +187,8 @@ CXX_PROTOS =								\
   ../include/mesos/executor/executor.pb.h				\
   fetcher/fetcher.pb.cc							\
   ../include/mesos/fetcher/fetcher.pb.h					\
+  maintenance/maintenance.pb.cc						\
+  ../include/mesos/maintenance/maintenance.pb.h				\
   master/allocator.pb.cc						\
   ../include/mesos/master/allocator.pb.h				\
   module/module.pb.cc							\
@@ -277,6 +282,12 @@ fetcher/%.pb.cc ../include/mesos/fetcher/%.pb.h: $(FETCHER_PROTO)
 	$(MKDIR_P) ../include/mesos/fetcher
 	$(PROTOC) $(PROTOCFLAGS) --cpp_out=../include $^
 	mv ../include/mesos/fetcher/*.pb.cc $(@D)
+
+maintenance/%.pb.cc ../include/mesos/maintenance/%.pb.h: $(MAINTENANCE_PROTO)
+	$(MKDIR_P) $(@D)
+	$(MKDIR_P) ../include/mesos/maintenance
+	$(PROTOC) $(PROTOCFLAGS) --cpp_out=../include $^
+	mv ../include/mesos/maintenance/*.pb.cc $(@D)
 
 master/%.pb.cc ../include/mesos/master/%.pb.h: $(ALLOCATOR_PROTO)
 	$(MKDIR_P) $(@D)
@@ -414,7 +425,7 @@ libmesos_no_3rdparty_la_SOURCES =					\
 	common/values.cpp						\
 	docker/docker.hpp						\
 	docker/docker.cpp						\
-        docker/executor.hpp                                             \
+	docker/executor.hpp						\
 	exec/exec.cpp							\
 	files/files.cpp							\
 	hook/manager.cpp						\
@@ -535,6 +546,14 @@ fetcher_HEADERS =							\
   $(top_srcdir)/include/mesos/fetcher/fetcher.proto
 
 nodist_fetcher_HEADERS = ../include/mesos/fetcher/fetcher.pb.h
+
+maintenancedir = $(pkgincludedir)/maintenance
+
+maintenance_HEADERS =							\
+  $(top_srcdir)/include/mesos/maintenance/maintenance.hpp		\
+  $(top_srcdir)/include/mesos/maintenance/maintenance.proto
+
+nodist_maintenance_HEADERS = ../include/mesos/maintenance/maintenance.pb.h
 
 masterdir = $(pkgincludedir)/master
 
@@ -889,6 +908,7 @@ lib_LTLIBRARIES += libmesos.la
 # Include as part of the distribution.
 libmesos_la_SOURCES =							\
   $(ALLOCATOR_PROTO)							\
+  $(MAINTENANCE_PROTO)							\
   $(CONTAINERIZER_PROTO)						\
   $(FETCHER_PROTO)							\
   $(MESOS_PROTO)							\

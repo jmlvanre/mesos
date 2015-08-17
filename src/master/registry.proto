@@ -17,9 +17,14 @@
  */
 
 import "mesos/mesos.proto";
+import "mesos/maintenance/maintenance.proto";
 
 package mesos.internal;
 
+/**
+ * A master object that is managed by the Registrar and persisted in
+ * a replicated log.  This object is recovered upon master failover.
+ */
 message Registry {
   message Master {
     required MasterInfo info = 1;
@@ -33,9 +38,29 @@ message Registry {
     repeated Slave slaves = 1;
   }
 
+  // A specific machine and its maintenance mode. If an entry does
+  // not exists for a machine, it is in "Normal" mode.
+  message MaintenanceStatus {
+    // Information to identify the machine.
+    required MachineInfo id = 1;
+
+    // Describes the maintenance mode this machine is in.
+    required maintenance.Mode mode = 2;
+  }
+
   // Most recent leading master.
   optional Master master = 1;
 
   // All admitted slaves.
   optional Slaves slaves = 2;
+
+  // Describes the maintenance status of a list of machines.
+  // Every machine included in 'schedules' must have an associated
+  // entry here.
+  repeated MaintenanceStatus statuses = 3;
+
+  // Describes a schedule for taking down specific hosts for
+  // maintenance. The schedule is meant to give hints to frameworks
+  // about potential unavailability of resources.
+  repeated maintenance.Schedule schedules = 4;
 }
