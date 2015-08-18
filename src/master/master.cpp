@@ -2758,7 +2758,7 @@ void Master::accept(
     // validation failed, return resources to the allocator.
     foreach (const OfferID& offerId, accept.offer_ids()) {
       Offer* offer = getOffer(offerId);
-      if (offer != NULL) {
+      if (offer != NULL) { // If this is a resource offer.
         slaveId = offer->slave_id();
         offeredResources += offer->resources();
 
@@ -2770,6 +2770,21 @@ void Master::accept(
               None());
         }
         removeOffer(offer);
+        continue;
+      }
+
+      InverseOffer* inverseOffer = getInverseOffer(offerId);
+      if (inverseOffer != NULL) { // If this is an inverse offer.
+        mesos::master::InverseOfferResponse response;
+        response.set_status(mesos::master::InverseOfferResponse::ACCEPT);
+
+        allocator->updateInverseOffer(
+            offer->slave_id(),
+            offer->framework_id(),
+            response);
+
+        removeInverseOffer(inverseOffer);
+        continue;
       }
     }
   }
@@ -3215,9 +3230,24 @@ void Master::decline(
           decline.filters());
 
       removeOffer(offer);
+      continue;
     } else {
-      LOG(WARNING) << "Ignoring decline of offer " << offerId
-                   << " since it is no longer valid";
+      InverseOffer* inverseOffer = getInverseOffer(offerId);
+      if (inverseOffer != NULL) { // If this is an inverse offer.
+        mesos::master::InverseOfferResponse response;
+        response.set_status(mesos::master::InverseOfferResponse::DECLINE);
+
+        allocator->updateInverseOffer(
+            offer->slave_id(),
+            offer->framework_id(),
+            response);
+
+        removeInverseOffer(inverseOffer);
+        continue;
+      } else {
+        LOG(WARNING) << "Ignoring decline of offer " << offerId
+                    << " since it is no longer valid";
+      }
     }
   }
 }
