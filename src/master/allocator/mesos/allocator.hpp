@@ -230,7 +230,7 @@ public:
       const FrameworkID& frameworkId,
       const Option<UnavailableResources>& unavailableResources,
       const Option<mesos::master::InverseOfferStatus>& status,
-      const Option<Filters>& filters) = 0;
+      const Option<Filters>& filters = None()) = 0;
 
   virtual void recoverResources(
       const FrameworkID& frameworkId,

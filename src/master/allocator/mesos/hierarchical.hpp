@@ -219,8 +219,7 @@ protected:
   // on this slave.
   bool isFiltered(
       const FrameworkID& frameworkID,
-      const SlaveID& slaveID,
-      const UnavailableResources& unavailableResources);
+      const SlaveID& slaveID);
 
   bool allocatable(const Resources& resources);
 
@@ -398,39 +397,36 @@ public:
 
 
 // Used to represent "filters" for inverse offers.
+// NOTE: Since this specific allocator implementation only sends inverse offers
+// for maintenance primitives, and those are at the whole slave level, we only
+// need to filter based on the time-out.
+// If this allocator implementation starts sending out more resource specific
+// inverse offers, then we can capture the `unavailableResources` in the filter
+// function.
 class InverseOfferFilter
 {
 public:
   virtual ~InverseOfferFilter() {}
 
-  virtual bool filter(
-      const SlaveID& slaveId,
-      const Option<UnavailableResources>& unavailableResources) = 0;
+  virtual bool filter() = 0;
 };
 
 
+// NOTE: See comment above `InverseOfferFilter` regarding capturing
+// `unavailableResources` if this allocator starts sending fine-grained inverse
+// offers.
 class RefusedInverseOfferFilter: public InverseOfferFilter
 {
 public:
-  RefusedInverseOfferFilter(
-      const SlaveID& _slaveId,
-      const Option<UnavailableResources>& _unavailableResources,
-      const process::Timeout& _timeout)
-    : slaveId(_slaveId),
-      unavailableResources(_unavailableResources),
-      timeout(_timeout) {}
+  RefusedInverseOfferFilter(const process::Timeout& _timeout)
+    : timeout(_timeout) {}
 
-  virtual bool filter(
-      const SlaveID& _slaveId,
-      const Option<UnavailableResources>& _unavailableResources)
+  virtual bool filter()
   {
-    // TODO(hartem): For now we just ignore _unavailableResources.
-    return slaveId == _slaveId &&
-           timeout.remaining() > Seconds(0);
+    // See comment above why we currently don't do more fine-grained filtering.
+    return timeout.remaining() > Seconds(0);
   }
 
-  const SlaveID slaveId;
-  const Option<UnavailableResources> unavailableResources;
   const process::Timeout timeout;
 };
 
@@ -594,6 +590,7 @@ HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::deactivateFramework(
   // HierarchicalAllocatorProcess::reviveOffers and
   // HierarchicalAllocatorProcess::expire.
   frameworks[frameworkId].offerFilters.clear();
+  frameworks[frameworkId].inverseOfferFilters.clear();
 
   LOG(INFO) << "Deactivated framework " << frameworkId;
 }
@@ -913,6 +910,15 @@ HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::updateUnavailability(
   // NOTE: We currently implement maintenance in the allocator to be able to
   // leverage state and features such as the FrameworkSorter and OfferFilter.
 
+  // We explicitly remove all filters for the inverse offers of this slave. We
+  // do this because we want to force frameworks to reassess the calculations
+  // they have made to respond to the inverse offer. Unavailability of a slave
+  // can have a large effect on failure domain calculations and inter-leaved
+  // unavailability schedules.
+  foreachvalue (Framework& framework, frameworks) {
+    framework.inverseOfferFilters.erase(slaveId);
+  }
+
   // Remove any old unavailability.
   slaves[slaveId].maintenance = None();
 
@@ -970,7 +976,7 @@ HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::updateInverseOffer(
     }
   }
 
-  // No need to install filters if 'filters' is none.
+  // No need to install filters if `filters` is none.
   if (filters.isNone()) {
     return;
   }
@@ -988,6 +994,7 @@ HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::updateInverseOffer(
     LOG(WARNING) << "Using the default value of 'refuse_seconds' to create "
                  << "the refused inverse offer filter because the input value "
                  << "is negative";
+
     seconds = Duration::create(Filters().refuse_seconds());
   }
 
@@ -995,24 +1002,23 @@ HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::updateInverseOffer(
 
   if (seconds.get() != Duration::zero()) {
     VLOG(1) << "Framework " << frameworkId
-            << " filtered slave " << slaveId
+            << " filtered inverse offers from slave " << slaveId
             << " for " << seconds.get();
 
-    // Create a new inverse offer filter and delay its expiration;
-    InverseOfferFilter* inverseOfferFilter = new RefusedInverseOfferFilter(
-        slaveId,
-        unavailableResources,
-        process::Timeout::in(seconds.get()));
+    // Create a new inverse offer filter and delay its expiration.
+    InverseOfferFilter* inverseOfferFilter =
+      new RefusedInverseOfferFilter(process::Timeout::in(seconds.get()));
 
-    frameworks[frameworkId].inverseOfferFilters[slaveId].insert(
-        inverseOfferFilter);
+    frameworks[frameworkId]
+      .inverseOfferFilters[slaveId].insert(inverseOfferFilter);
 
     // We need to disambiguate the function call to pick the correct
     // expire() overload.
-    void (Self::*expireInverseOffer)
-        (const FrameworkID&,
-         const SlaveID&,
-         InverseOfferFilter*) = &Self::expire;
+    void (Self::*expireInverseOffer)(
+             const FrameworkID&,
+             const SlaveID&,
+             InverseOfferFilter*) = &Self::expire;
+
     delay(
         seconds.get(),
         self(),
@@ -1117,11 +1123,18 @@ HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::recoverResources(
 
     // We need to disambiguate the function call to pick the correct
     // expire() overload.
-    void (Self::*expireOffer)
-        (const FrameworkID&,
-         const SlaveID&,
-         OfferFilter*) = &Self::expire;
-    delay(seconds.get(), self(), expireOffer, frameworkId, slaveId, offerFilter);
+    void (Self::*expireOffer)(
+              const FrameworkID&,
+              const SlaveID&,
+              OfferFilter*) = &Self::expire;
+
+    delay(
+        seconds.get(),
+        self(),
+        expireOffer,
+        frameworkId,
+        slaveId,
+        offerFilter);
   }
 }
 
@@ -1144,6 +1157,7 @@ HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::reviveOffers(
   CHECK(initialized);
 
   frameworks[frameworkId].offerFilters.clear();
+  frameworks[frameworkId].inverseOfferFilters.clear();
   frameworks[frameworkId].quiesced = false;
 
   // We delete each actual `OfferFilter` when
@@ -1345,15 +1359,21 @@ HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::deallocate(
             // If there isn't already an outstanding inverse offer to this
             // framework for the specified slave.
             if (!maintenance.offersOutstanding.contains(frameworkId)) {
+              // Ignore in case the framework filters inverse offers for this
+              // slave.
+              // NOTE: Since this specific allocator implementation only sends
+              // inverse offers for maintenance primitives, and those are at the
+              // whole slave level, we only need to filter based on the
+              // time-out.
+              if (isFiltered(frameworkId, slaveId)) {
+                continue;
+              }
+
               const UnavailableResources unavailableResources =
                 UnavailableResources{
                     Resources(),
                     maintenance.unavailability};
 
-              // Ignore in case the framework filters inverse offers with these resources.
-              if (isFiltered(frameworkId, slaveId, unavailableResources)) {
-                continue;
-              }
               // For now we send inverse offers with empty resources when the
               // inverse offer represents maintenance on the machine. In the
               // future we could be more specific about the resources on the
@@ -1420,8 +1440,11 @@ HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::expire(
   // expiration).
   if (frameworks.contains(frameworkId) &&
       frameworks[frameworkId].inverseOfferFilters.contains(slaveId) &&
-      frameworks[frameworkId].inverseOfferFilters[slaveId].contains(inverseOfferFilter)) {
-    frameworks[frameworkId].inverseOfferFilters[slaveId].erase(inverseOfferFilter);
+      frameworks[frameworkId].inverseOfferFilters[slaveId]
+        .contains(inverseOfferFilter)) {
+    frameworks[frameworkId].inverseOfferFilters[slaveId]
+      .erase(inverseOfferFilter);
+
     if(frameworks[frameworkId].inverseOfferFilters[slaveId].empty()) {
       frameworks[frameworkId].inverseOfferFilters.erase(slaveId);
     }
@@ -1484,8 +1507,7 @@ HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::isFiltered(
 template <class RoleSorter, class FrameworkSorter>
 bool HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::isFiltered(
     const FrameworkID& frameworkId,
-    const SlaveID& slaveId,
-    const UnavailableResources& unavailableResources)
+    const SlaveID& slaveId)
 {
   CHECK(frameworks.contains(frameworkId));
   CHECK(slaves.contains(slaveId));
@@ -1494,14 +1516,15 @@ bool HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::isFiltered(
     foreach (
         InverseOfferFilter* inverseOfferFilter,
         frameworks[frameworkId].inverseOfferFilters[slaveId]) {
-      if (inverseOfferFilter->filter(slaveId, unavailableResources)) {
-        VLOG(1) << "Filtered unavailability for " << unavailableResources.resources
-                << " on slave " << slaveId
+      if (inverseOfferFilter->filter()) {
+        VLOG(1) << "Filtered unavailability on slave " << slaveId
                 << " for framework " << frameworkId;
+
         return true;
       }
     }
   }
+
   return false;
 }
 
