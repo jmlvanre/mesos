@@ -361,7 +361,6 @@ class RefusedOfferFilter: public OfferFilter
 {
 public:
   RefusedOfferFilter(
-      const SlaveID& _slaveId,
       const Resources& _resources,
       const process::Timeout& _timeout)
     : resources(_resources), timeout(_timeout) {}
@@ -1003,7 +1002,6 @@ HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::recoverResources(
 
     // Create a new filter and delay its expiration.
     OfferFilter* offerFilter = new RefusedOfferFilter(
-        slaveId,
         resources,
         process::Timeout::in(seconds.get()));
 
@@ -1040,10 +1038,10 @@ HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::reviveOffers(
   frameworks[frameworkId].offerFilters.clear();
   frameworks[frameworkId].quiesced = false;
 
-  // We delete each actual OfferFilter when
-  // HierarchicalAllocatorProcess::expire gets invoked. If we delete the
-  // OfferFilter here it's possible that the same OfferFilter (i.e., same
-  // address) could get reused and HierarchicalAllocatorProcess::expire
+  // We delete each actual `OfferFilter` when
+  // `HierarchicalAllocatorProcess::expire` gets invoked. If we delete the
+  // `OfferFilter` here it's possible that the same `OfferFilter` (i.e., same
+  // address) could get reused and `HierarchicalAllocatorProcess::expire`
   // would expire that filter too soon. Note that this only works
   // right now because ALL Filter types "expire".
 
@@ -1320,22 +1318,26 @@ HierarchicalAllocatorProcess<RoleSorter, FrameworkSorter>::isFiltered(
   // framework. This is a short term fix until the following is resolved:
   // https://issues.apache.org/jira/browse/MESOS-444.
   if (frameworks[frameworkId].checkpoint && !slaves[slaveId].checkpoint) {
-    VLOG(1) << "Filtered " << resources
+    VLOG(1) << "Filtered offer with " << resources
             << " on non-checkpointing slave " << slaveId
             << " for checkpointing framework " << frameworkId;
+
     return true;
   }
 
   if (frameworks[frameworkId].offerFilters.contains(slaveId)) {
-    foreach (OfferFilter* offerFilter, frameworks[frameworkId].offerFilters[slaveId]) {
+    foreach (
+      OfferFilter* offerFilter, frameworks[frameworkId].offerFilters[slaveId]) {
       if (offerFilter->filter(resources)) {
-        VLOG(1) << "Filtered " << resources
+        VLOG(1) << "Filtered offer with " << resources
                 << " on slave " << slaveId
                 << " for framework " << frameworkId;
+
         return true;
       }
     }
   }
+
   return false;
 }
 
