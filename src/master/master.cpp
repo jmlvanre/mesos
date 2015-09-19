@@ -2346,6 +2346,7 @@ void Master::_subscribe(
             UnavailableResources{
                 inverseOffer->resources(),
                 inverseOffer->unavailability()},
+            None(),
             None());
 
         removeInverseOffer(inverseOffer, true); // Rescind.
@@ -2514,6 +2515,7 @@ void Master::deactivate(Framework* framework)
         UnavailableResources{
             inverseOffer->resources(),
             inverseOffer->unavailability()},
+        None(),
         None());
 
     removeInverseOffer(inverseOffer, true); // Rescind.
@@ -2566,6 +2568,7 @@ void Master::deactivate(Slave* slave)
         UnavailableResources{
             inverseOffer->resources(),
             inverseOffer->unavailability()},
+        None(),
         None());
 
     removeInverseOffer(inverseOffer, true); // Rescind!
@@ -2850,7 +2853,8 @@ void Master::accept(
             UnavailableResources{
                 inverseOffer->resources(),
                 inverseOffer->unavailability()},
-            status);
+            status,
+            accept.filters());
 
         removeInverseOffer(inverseOffer);
         continue;
@@ -3324,7 +3328,8 @@ void Master::decline(
           UnavailableResources{
               inverseOffer->resources(),
               inverseOffer->unavailability()},
-          status);
+          status,
+          decline.filters());
 
       removeInverseOffer(inverseOffer);
       continue;
@@ -4338,6 +4343,7 @@ void Master::updateUnavailability(
             UnavailableResources{
                 inverseOffer->resources(),
                 inverseOffer->unavailability()},
+            None(),
             None());
 
         removeInverseOffer(inverseOffer, true); // Rescind!
@@ -5515,6 +5521,7 @@ void Master::_failoverFramework(Framework* framework)
         UnavailableResources{
             inverseOffer->resources(),
             inverseOffer->unavailability()},
+        None(),
         None());
 
     removeInverseOffer(inverseOffer);
@@ -5630,6 +5637,7 @@ void Master::removeFramework(Framework* framework)
         UnavailableResources{
             inverseOffer->resources(),
             inverseOffer->unavailability()},
+        None(),
         None());
 
     removeInverseOffer(inverseOffer);
@@ -6274,6 +6282,7 @@ void Master::inverseOfferTimeout(const OfferID& inverseOfferId)
         UnavailableResources{
             inverseOffer->resources(),
             inverseOffer->unavailability()},
+        None(),
         None());
 
     removeInverseOffer(inverseOffer, true);
