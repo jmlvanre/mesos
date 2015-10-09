@@ -1304,7 +1304,7 @@ ostream& operator<<(ostream& stream, const Resource& resource)
   }
 
   if (resource.has_source()) {
-    stream << "[";
+    stream << "[" << Megabytes(resource.source().total_size()) << "@";
     if (resource.source().has_block()) {
       stream << "block=" << resource.source().block().path();
     } else if (resource.source().has_folder()) {
