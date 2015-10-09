@@ -67,7 +67,8 @@ public:
   static Try<Resource> parse(
       const std::string& name,
       const std::string& value,
-      const std::string& role);
+      const std::string& role,
+      const Option<std::string>& source = None());
 
   // Parses Resources from text in the form "name:value(role);
   // name:value;...". Any name/value pair that doesn't specify a role

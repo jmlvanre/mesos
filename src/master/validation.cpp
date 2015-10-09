@@ -194,9 +194,9 @@ Option<Error> validateDiskInfo(const RepeatedPtrField<Resource>& resources)
       if (resource.disk().volume().mode() == Volume::RO) {
         return Error("Read-only persistent volume not supported");
       }
-      if (resource.disk().volume().has_host_path()) {
-        return Error("Expecting 'host_path' to be unset for persistent volume");
-      }
+      //if (resource.disk().volume().has_host_path()) {
+      //  return Error("Expecting 'host_path' to be unset for persistent volume");
+      //}
 
       // Ensure persistence ID does not have invalid characters.
       string id = resource.disk().persistence().id();

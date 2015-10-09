@@ -31,6 +31,7 @@
 #include <stout/foreach.hpp>
 #include <stout/hashmap.hpp>
 #include <stout/lambda.hpp>
+#include <stout/path.hpp>
 #include <stout/strings.hpp>
 
 using std::map;
@@ -155,6 +156,15 @@ static bool addable(const Resource& left, const Resource& right)
   }
 
   if (left.has_reservation() && left.reservation() != right.reservation()) {
+    return false;
+  }
+
+  // Check Source.
+  if (left.has_source() != right.has_source()) {
+    return false;
+  }
+
+  if (left.has_source() && left.source() != right.source()) {
     return false;
   }
 
@@ -309,7 +319,8 @@ Resource operator-(const Resource& left, const Resource& right)
 Try<Resource> Resources::parse(
     const string& name,
     const string& value,
-    const string& role)
+    const string& role,
+    const Option<string>& source)
 {
   Try<Value> result = internal::values::parse(value);
   if (result.isError()) {
@@ -327,6 +338,33 @@ Try<Resource> Resources::parse(
   if (_value.type() == Value::SCALAR) {
     resource.set_type(Value::SCALAR);
     resource.mutable_scalar()->CopyFrom(_value.scalar());
+
+    // TODO(jmlvanre): Find a better place to parse source.
+    if (name == "disk" && source.isSome()) {
+      vector<string> pair = strings::tokenize(source.get(), "=");
+      if (pair.size() != 2) {
+        return Error(
+            "Bad value for source, missing or extra '=' in " + source.get());
+      }
+
+      Resource::Source _source;
+      // TODO(jmlvanre): validate that these paths are accessible.
+      if (pair[0] == "block") {
+        _source.mutable_block()->set_path(pair[1]);
+      } else if (pair[0] == "folder") {
+        _source.mutable_folder()->set_path(pair[1]);
+      } else if (pair[0] == "mount") {
+        _source.mutable_mount()->set_path(pair[1]);
+      } else {
+        return Error(
+        "Bad source for resource " + name + " value " + value +
+        " type " + Value::Type_Name(_value.type()) + " source " + source.get());
+      }
+
+      resource.mutable_source()->CopyFrom(_source);
+
+      resource.mutable_source()->set_total_size(_value.scalar().value());
+    }
   } else if (_value.type() == Value::RANGES) {
     resource.set_type(Value::RANGES);
     resource.mutable_ranges()->CopyFrom(_value.ranges());
@@ -379,7 +417,21 @@ Try<Resources> Resources::parse(
           closeParen - openParen - 1));
     }
 
-    Try<Resource> resource = Resources::parse(name, pair[1], role);
+    Option<string> source;
+    size_t openBrace = pair[0].find("[");
+    if (openBrace != string::npos) {
+      size_t closeBrace = pair[0].find("]");
+      if (closeBrace == string::npos || closeBrace < openBrace) {
+        return Error(
+            "Bad value for resources, mismatched braces in " + token);
+      }
+
+      source = strings::trim(pair[0].substr(
+          openBrace + 1,
+          closeBrace - openBrace - 1));
+    }
+
+    Try<Resource> resource = Resources::parse(name, pair[1], role, source);
     if (resource.isError()) {
       return Error(resource.error());
     }
@@ -805,11 +857,40 @@ Try<Resources> Resources::apply(const Offer::Operation& operation) const
         return Error("Invalid CREATE Operation: " + error.get().message);
       }
 
-      foreach (const Resource& volume, operation.create().volumes()) {
+      foreach (Resource volume, operation.create().volumes()) {
         if (!volume.has_disk()) {
           return Error("Invalid CREATE Operation: Missing 'disk'");
         } else if (!volume.disk().has_persistence()) {
           return Error("Invalid CREATE Operation: Missing 'persistence'");
+        }
+
+        // If the disk resource has a source, we set the volume host path to
+        // the resource source path.
+        if (volume.has_source()) {
+
+          // If no volume is set, we need to create an artificial
+          // container_path.
+          if (!volume.disk().has_volume()) {
+            volume.mutable_disk()->mutable_volume()->set_container_path(
+                UUID::random().toString());
+          }
+
+          std::string mount_path;
+          if (volume.source().has_block()) {
+            mount_path = volume.source().block().path();
+          } else if (volume.source().has_folder()) {
+            mount_path = volume.source().folder().path();
+          } else if (volume.source().has_mount()) {
+            mount_path = volume.source().mount().path();
+          } else {
+            ABORT("Source must be block, folder, or mount");
+          }
+          CHECK(!mount_path.empty());
+
+          mount_path =
+            path::join(mount_path, volume.disk().volume().container_path());
+
+          volume.mutable_disk()->mutable_volume()->set_host_path(mount_path);
         }
 
         // Strip the disk info so that we can subtract it from the
@@ -1220,6 +1301,18 @@ ostream& operator<<(ostream& stream, const Resource& resource)
 
   if (resource.has_disk()) {
     stream << "[" << resource.disk() << "]";
+  }
+
+  if (resource.has_source()) {
+    stream << "[";
+    if (resource.source().has_block()) {
+      stream << "block=" << resource.source().block().path();
+    } else if (resource.source().has_folder()) {
+      stream << "folder=" << resource.source().folder().path();
+    } else if (resource.source().has_mount()) {
+      stream << "mount=" << resource.source().mount().path();
+    }
+    stream << "]";
   }
 
   // Once extended revocable attributes are available, change this to a more

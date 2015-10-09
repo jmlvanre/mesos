@@ -646,6 +646,28 @@ message Resource {
   // guarantees. Note that if this is set, 'disk' or 'reservation'
   // cannot be set.
   optional RevocableInfo revocable = 9;
+
+  message Source {
+    message Block {
+      required string path = 1;
+    }
+
+    message Folder {
+      required string path = 1;
+    }
+
+    message Mount {
+      required string path = 1;
+    }
+
+    optional Block block = 1;
+    optional Folder folder = 2;
+    optional Mount mount = 3;
+
+    optional double total_size = 4;
+  }
+
+  optional Source source = 10;
 }
 
 /**

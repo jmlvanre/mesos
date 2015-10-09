@@ -60,14 +60,15 @@ using std::vector;
 // reserved resources.
 static Resources SHARD_INITIAL_RESOURCES(const string& role)
 {
-  return Resources::parse("cpus:0.1;mem:32;disk:16", role).get();
+  return Resources::parse("cpus:0.1;mem:32;disk:64", role).get();
 }
 
 
 static Resource SHARD_PERSISTENT_VOLUME(
     const string& role,
     const string& persistenceId,
-    const string& containerPath)
+    const string& containerPath,
+    const Resource::Source& source)
 {
   Volume volume;
   volume.set_container_path(containerPath);
@@ -79,6 +80,7 @@ static Resource SHARD_PERSISTENT_VOLUME(
 
   Resource resource = Resources::parse("disk", "8", role).get();
   resource.mutable_disk()->CopyFrom(info);
+  resource.mutable_source()->CopyFrom(source);
 
   return resource;
 }
@@ -169,10 +171,27 @@ public:
         switch (shard.state) {
           case Shard::INIT:
             if (offered.contains(shard.resources)) {
+
+              std::vector<Resource::Source> sources;
+              for (const auto& r : offered) {
+                if (r.has_source() && (r.name() == "disk") && Megabytes(r.scalar().value()) >= shard.resources.disk().get()) {
+                  sources.push_back(r.source());
+                }
+              }
+
+              printf("\tfolders: ");
+              for (const auto& s : sources) {
+                printf("[%s], ", s.folder().path().c_str());
+              }
+              printf("\n");
+
+              CHECK(!sources.empty());
               Resource volume = SHARD_PERSISTENT_VOLUME(
                   frameworkInfo.role(),
                   UUID::random().toString(),
-                  "volume");
+                  shard.container_path,
+                  sources.front());
+              printf("\t\tchosen folder [%s]\n", sources.front().folder().path().c_str());
 
               Try<Resources> resources = shard.resources.apply(CREATE(volume));
               CHECK_SOME(resources);
@@ -182,7 +201,7 @@ public:
               task.mutable_task_id()->set_value(UUID::random().toString());
               task.mutable_slave_id()->CopyFrom(offer.slave_id());
               task.mutable_resources()->CopyFrom(resources.get());
-              task.mutable_command()->set_value("touch volume/persisted");
+              task.mutable_command()->set_value("touch " + shard.container_path + "/persisted; sleep 60; echo hi");
 
               // Update the shard.
               shard.state = Shard::STAGING;
@@ -201,6 +220,8 @@ public:
 
               CHECK_SOME(resources);
               offered = resources.get();
+
+              offered = offered.filter([&](const Resource& r){ return !r.has_source() || r.source() != sources.front(); });
             }
             break;
           case Shard::WAITING:
@@ -212,7 +233,7 @@ public:
               task.mutable_task_id()->set_value(UUID::random().toString());
               task.mutable_slave_id()->CopyFrom(offer.slave_id());
               task.mutable_resources()->CopyFrom(shard.resources);
-              task.mutable_command()->set_value("test -f volume/persisted");
+              task.mutable_command()->set_value("test -f " + shard.container_path + "/persisted");
 
               // Update the shard.
               shard.state = Shard::STAGING;
@@ -233,6 +254,8 @@ public:
             break;
         }
       }
+
+      printf("operations = [%ld]\n", operations.size());
 
       driver->acceptOffers({offer.id()}, operations);
     }
@@ -357,12 +380,14 @@ private:
     };
 
     Shard(const string& _name, const string& role, size_t _tasks)
-      : name(_name),
+      : container_path(UUID::random().toString()),
+        name(_name),
         state(INIT),
         resources(SHARD_INITIAL_RESOURCES(role)),
         launched(0),
         tasks(_tasks) {}
 
+    string container_path;
     string name;
     State state;          // The current state of this shard.
     TaskID taskId;        // The ID of the current task.
@@ -480,6 +505,8 @@ int main(int argc, char** argv)
       flags.master.get());
 
   int status = driver->run() == DRIVER_STOPPED ? EXIT_SUCCESS : EXIT_FAILURE;
+
+  sleep(1000);
 
   driver->stop();
   delete driver;

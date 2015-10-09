@@ -188,6 +188,17 @@ Future<Nothing> PosixFilesystemIsolatorProcess::update(
         resource.role(),
         resource.disk().persistence().id());
 
+    // Remap the volume path if this disk has a specific source.
+    if (resource.has_source()) {
+      CHECK(resource.has_disk());
+      CHECK(resource.disk().has_volume());
+      CHECK(resource.disk().volume().has_host_path());
+      original = resource.disk().volume().host_path();
+      // Ensuring mountable path.
+      LOG(INFO) << "Ensuring mountable path '" << original << "'";
+      os::mkdir(original, true);
+    }
+
     // Set the ownership of the persistent volume to match that of the
     // sandbox directory.
     //

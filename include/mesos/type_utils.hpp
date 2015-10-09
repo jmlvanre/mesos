@@ -161,6 +161,46 @@ inline bool operator==(const TaskID& left, const std::string& right)
 }
 
 
+inline bool operator==(
+    const Resource::Source& left,
+    const Resource::Source& right)
+{
+  if (left.has_block() != right.has_block()) {
+    return false;
+  }
+
+  if (left.has_folder() != right.has_folder()) {
+    return false;
+  }
+
+  if (left.has_mount() != right.has_mount()) {
+    return false;
+  }
+
+  if (left.has_block() && left.block().path() == right.block().path()) {
+    return true;
+  }
+
+  if (left.has_folder() && left.folder().path() == right.folder().path()) {
+    return true;
+  }
+
+  if (left.has_mount() && left.mount().path() == right.mount().path()) {
+    return true;
+  }
+
+  return false;
+}
+
+
+inline bool operator!=(
+    const Resource::Source& left,
+    const Resource::Source& right)
+{
+  return !(left == right);
+}
+
+
 /**
  * For machines to match, both the `hostname` and `ip` must be equivalent.
  * Hostname is not case sensitive, so it is lowercased before comparison.
