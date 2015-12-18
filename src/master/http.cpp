@@ -342,6 +342,129 @@ void Master::Http::log(const Request& request)
 }
 
 
+Future<Response> Master::Http::dns(const Request& request) const
+{
+  // TODO(vinod): Add metrics for rejected requests.
+
+  // TODO(vinod): Add support for rate limiting.
+
+  if (!master->elected()) {
+    // Note that this could happen if the scheduler realizes this is the
+    // leading master before master itself realizes it (e.g., ZK watch delay).
+    return ServiceUnavailable("Not the leading master");
+  }
+
+  CHECK_SOME(master->recovered);
+
+  if (!master->recovered.get().isReady()) {
+    return ServiceUnavailable("Master has not finished recovery");
+  }
+
+  if (request.method != "POST") {
+    return MethodNotAllowed(
+        "Expecting a 'POST' request, received '" + request.method + "'");
+  }
+
+  v1::dns::Call v1Call;
+
+  // TODO(anand): Content type values are case-insensitive.
+  Option<string> contentType = request.headers.get("Content-Type");
+
+  if (contentType.isNone()) {
+    return BadRequest("Expecting 'Content-Type' to be present");
+  }
+
+  if (contentType.get() == APPLICATION_PROTOBUF) {
+    if (!v1Call.ParseFromString(request.body)) {
+      return BadRequest("Failed to parse body into Call protobuf");
+    }
+  } else if (contentType.get() == APPLICATION_JSON) {
+    Try<JSON::Value> value = JSON::parse(request.body);
+
+    if (value.isError()) {
+      return BadRequest("Failed to parse body into JSON: " + value.error());
+    }
+
+    Try<v1::dns::Call> parse =
+      ::protobuf::parse<v1::dns::Call>(value.get());
+
+    if (parse.isError()) {
+      return BadRequest("Failed to convert JSON into Call protobuf: " +
+                        parse.error());
+    }
+
+    v1Call = parse.get();
+  } else {
+    return UnsupportedMediaType(
+        string("Expecting 'Content-Type' of ") +
+        APPLICATION_JSON + " or " + APPLICATION_PROTOBUF);
+  }
+
+  if (v1Call.type() == v1::dns::Call::SUBSCRIBE) {
+    // We default to JSON since an empty 'Accept' header
+    // results in all media types considered acceptable.
+    ContentType responseContentType;
+
+    if (request.acceptsMediaType(APPLICATION_JSON)) {
+      responseContentType = ContentType::JSON;
+    } else if (request.acceptsMediaType(APPLICATION_PROTOBUF)) {
+      responseContentType = ContentType::PROTOBUF;
+    } else {
+      return NotAcceptable(
+          string("Expecting 'Accept' to allow ") +
+          "'" + APPLICATION_PROTOBUF + "' or '" + APPLICATION_JSON + "'");
+    }
+
+    Pipe pipe;
+    OK ok;
+    ok.headers["Content-Type"] = stringify(responseContentType);
+
+    ok.type = Response::PIPE;
+    ok.reader = pipe.reader();
+
+    DNSHttpConnection http {pipe.writer(), responseContentType};
+    master->DNSsubscribe(http, v1Call.subscribe());
+
+    foreachvalue (Framework* framework, master->frameworks.registered) {
+      foreachvalue (const TaskInfo& task, framework->pendingTasks) {
+        v1::dns::Event event;
+        event.set_type(v1::dns::Event::TASK);
+        event.mutable_task()->CopyFrom(task);
+        http.send(event);
+      }
+
+      foreachvalue (Task* task, framework->tasks) {
+        v1::dns::Event event;
+        event.set_type(v1::dns::Event::TASK);
+        event.mutable_task()->mutable_task_info()->set_name(task->name());
+        event.mutable_task()->mutable_task_info()->mutable_task_id()
+          ->CopyFrom(evolve(task->task_id()));
+
+        event.mutable_task()->mutable_task_info()->mutable_agent_id()
+          ->CopyFrom(evolve(task->slave_id()));
+
+        foreach (const Resource& resource, task->resources()) {
+          event.mutable_task()->mutable_task_info()->add_resources()
+            ->CopyFrom(resource);
+        }
+
+        event.mutable_task()->mutable_task_info()->mutable_labels()
+          ->CopyFrom(task->labels());
+
+        event.mutable_task()->mutable_task_info()->mutable_discovery()
+          ->CopyFrom(task->discovery());
+
+        http.send(event);
+      }
+    }
+
+    return ok;
+  }
+
+  return NotImplemented();
+}
+
+
 // TODO(ijimenez): Add some information or pointers to help
 // users understand the HTTP Event/Call API.
 string Master::Http::SCHEDULER_HELP()

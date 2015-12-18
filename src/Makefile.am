@@ -176,6 +176,9 @@ MODULE_PROTO =								\
 QUOTA_PROTO =								\
   $(top_srcdir)/include/mesos/quota/quota.proto
 
+V1_DNS_PROTO =								\
+  $(top_srcdir)/include/mesos/v1/dns/dns.proto
+
 SCHEDULER_PROTO =							\
   $(top_srcdir)/include/mesos/scheduler/scheduler.proto
 
@@ -220,7 +223,9 @@ CXX_PROTOS =								\
   v1/executor/executor.pb.cc						\
   ../include/mesos/v1/executor/executor.pb.h				\
   v1/scheduler/scheduler.pb.cc						\
-  ../include/mesos/v1/scheduler/scheduler.pb.h
+  ../include/mesos/v1/scheduler/scheduler.pb.h				\
+  v1/dns/dns.pb.cc							\
+  ../include/mesos/v1/dns/dns.pb.h
 
 
 JAVA_PROTOS =								\
@@ -370,6 +375,12 @@ v1/scheduler/%.pb.cc ../include/mesos/v1/scheduler/%.pb.h: $(V1_SCHEDULER_PROTO)
 	$(PROTOC) $(PROTOCFLAGS) --cpp_out=../include $^
 	mv ../include/mesos/v1/scheduler/*.pb.cc $(@D)
 
+v1/dns/%.pb.cc ../include/mesos/v1/dns/%.pb.h: $(V1_DNS_PROTO)
+	$(MKDIR_P) $(@D)
+	$(MKDIR_P) ../include/mesos/v1/dns
+	$(PROTOC) $(PROTOCFLAGS) --cpp_out=../include $^
+	mv ../include/mesos/v1/dns/*.pb.cc $(@D)
+
 slave/%.pb.cc ../include/mesos/slave/%.pb.h: $(top_srcdir)/include/mesos/slave/%.proto
 	$(MKDIR_P) $(@D)
 	$(MKDIR_P) ../include/mesos/slave
@@ -402,6 +413,10 @@ java/generated/org/apache/mesos/scheduler/Protos.java: $(SCHEDULER_PROTO)
 	$(PROTOC) $(PROTOCFLAGS) --java_out=java/generated $^
 
 java/generated/org/apache/mesos/v1/scheduler/Protos.java: $(V1_SCHEDULER_PROTO)
+	$(MKDIR_P)  $(@D)
+	$(PROTOC) $(PROTOCFLAGS) --java_out=java/generated $^
+
+java/generated/org/apache/mesos/v1/dns/Protos.java: $(V1_DNS_PROTO)
 	$(MKDIR_P)  $(@D)
 	$(PROTOC) $(PROTOCFLAGS) --java_out=java/generated $^
 
@@ -445,6 +460,13 @@ python/interface/src/mesos/interface/scheduler_pb2.py: $(SCHEDULER_PROTO)
 python/interface/src/mesos/v1/interface/scheduler_pb2.py: $(V1_SCHEDULER_PROTO)
 	$(MKDIR_P) $(@D)
 	$(PROTOC) -I$(top_srcdir)/include/mesos/v1/scheduler		\
+          $(PROTOCFLAGS)						\
+          --python_out=python/interface/src/mesos/v1/interface $^
+	$(SED) -i.bak 's/mesos\.mesos_pb2/mesos_pb2/' $@ && rm $@.bak
+
+python/interface/src/mesos/v1/interface/dns_pb2.py: $(V1_DNS_PROTO)
+	$(MKDIR_P) $(@D)
+	$(PROTOC) -I$(top_srcdir)/include/mesos/v1/dns			\
           $(PROTOCFLAGS)						\
           --python_out=python/interface/src/mesos/v1/interface $^
 	$(SED) -i.bak 's/mesos\.mesos_pb2/mesos_pb2/' $@ && rm $@.bak
@@ -730,6 +752,14 @@ v1scheduler_HEADERS =							\
   $(top_srcdir)/include/mesos/v1/scheduler/scheduler.proto
 
 nodist_v1scheduler_HEADERS = ../include/mesos/v1/scheduler/scheduler.pb.h
+
+v1dnsdir = $(pkgincludedir)/v1/dns
+
+v1dns_HEADERS =								\
+  $(top_srcdir)/include/mesos/v1/dns/dns.hpp				\
+  $(top_srcdir)/include/mesos/v1/dns/dns.proto
+
+nodist_v1dns_HEADERS = ../include/mesos/v1/dns/dns.pb.h
 
 v1executordir = $(pkgincludedir)/v1/executor
 

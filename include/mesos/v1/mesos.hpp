@@ -77,6 +77,14 @@ inline bool operator==(const ExecutorID& left, const ExecutorID& right)
 }
 
 
+inline bool operator==(
+    const DNSSubscriberID& left,
+    const DNSSubscriberID& right)
+{
+  return left.value() == right.value();
+}
+
+
 inline bool operator==(const FrameworkID& left, const FrameworkID& right)
 {
   return left.value() == right.value();
@@ -182,6 +190,14 @@ inline bool operator!=(const ExecutorID& left, const ExecutorID& right)
 }
 
 
+inline bool operator!=(
+    const DNSSubscriberID& left,
+    const DNSSubscriberID& right)
+{
+  return left.value() != right.value();
+}
+
+
 inline bool operator!=(const FrameworkID& left, const FrameworkID& right)
 {
   return left.value() != right.value();
@@ -271,6 +287,14 @@ inline std::ostream& operator<<(
     const ExecutorInfo& executor)
 {
   return stream << executor.DebugString();
+}
+
+
+inline std::ostream& operator<<(
+    std::ostream& stream,
+    const DNSSubscriberID& dnsSubscriberId)
+{
+  return stream << dnsSubscriberId.value();
 }
 
 
@@ -461,6 +485,22 @@ struct hash<mesos::v1::ExecutorID>
   {
     size_t seed = 0;
     boost::hash_combine(seed, executorId.value());
+    return seed;
+  }
+};
+
+
+template <>
+struct hash<mesos::v1::DNSSubscriberID>
+{
+  typedef size_t result_type;
+
+  typedef mesos::v1::DNSSubscriberID argument_type;
+
+  result_type operator()(const argument_type& dnsSubscriberId) const
+  {
+    size_t seed = 0;
+    boost::hash_combine(seed, dnsSubscriberId.value());
     return seed;
   }
 };

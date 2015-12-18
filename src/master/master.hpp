@@ -40,6 +40,8 @@
 
 #include <mesos/scheduler/scheduler.hpp>
 
+#include <mesos/v1/dns/dns.hpp>
+
 #include <process/limiter.hpp>
 #include <process/http.hpp>
 #include <process/owned.hpp>
@@ -101,8 +103,10 @@ class Repairer;
 class SlaveObserver;
 
 struct BoundedRateLimiter;
+struct DNSSubscriber;
 struct Framework;
 struct HttpConnection;
+struct DNSHttpConnection;
 struct Role;
 
 
@@ -555,6 +559,10 @@ protected:
   void exited(const FrameworkID& frameworkId, const HttpConnection& http);
   void _exited(Framework* framework);
 
+  void DNSexited(
+      const v1::DNSSubscriberID& dnsSubscriberId,
+      const DNSHttpConnection& http);
+
   // Invoked when the message is ready to be executed after
   // being throttled.
   // 'principal' being None indicates it is throttled by
@@ -766,6 +774,10 @@ private:
       const process::UPID& from,
       const scheduler::Call& call);
 
+  void DNSsubscribe(
+      DNSHttpConnection http,
+      const v1::dns::Call::Subscribe& subscribe);
+
   void subscribe(
       HttpConnection http,
       const scheduler::Call::Subscribe& subscribe);
@@ -844,6 +856,10 @@ private:
     // Logs the request, route handlers can compose this with the
     // desired request handler to get consistent request logging.
     static void log(const process::http::Request& request);
+
+    // /api/v1/dns
+    process::Future<process::http::Response> dns(
+        const process::http::Request& request) const;
 
     // /api/v1/scheduler
     process::Future<process::http::Response> scheduler(
@@ -1169,6 +1185,8 @@ private:
     Option<process::Owned<BoundedRateLimiter>> defaultLimiter;
   } frameworks;
 
+  hashmap<v1::DNSSubscriberID, DNSSubscriber*> dnsSubscribers;
+
   hashmap<OfferID, Offer*> offers;
   hashmap<OfferID, process::Timer> offerTimers;
 
@@ -1412,6 +1430,35 @@ struct HttpConnection
 };
 
 
+struct DNSHttpConnection
+{
+  DNSHttpConnection(const process::http::Pipe::Writer& _writer,
+                    ContentType _contentType)
+    : writer(_writer),
+      contentType(_contentType),
+      encoder(lambda::bind(serialize, contentType, lambda::_1)) {}
+
+  bool send(const v1::dns::Event& event)
+  {
+    return writer.write(encoder.encode(event));
+  }
+
+  bool close()
+  {
+    return writer.close();
+  }
+
+  process::Future<Nothing> closed() const
+  {
+    return writer.readerClosed();
+  }
+
+  process::http::Pipe::Writer writer;
+  ContentType contentType;
+  ::recordio::Encoder<v1::dns::Event> encoder;
+};
+
+
 // This process periodically sends heartbeats to a scheduler on the
 // given HTTP connection.
 class Heartbeater : public process::Process<Heartbeater>
@@ -1450,6 +1497,99 @@ private:
   const FrameworkID frameworkId;
   HttpConnection http;
   const Duration interval;
+};
+
+
+class DNSHeartbeater : public process::Process<DNSHeartbeater>
+{
+public:
+  DNSHeartbeater(const v1::DNSSubscriberID& _dnsSubscriberId,
+                 const DNSHttpConnection& _http,
+                 const Duration& _interval)
+    : process::ProcessBase(process::ID::generate("dnsheartbeater")),
+      dnsSubscriberId(_dnsSubscriberId),
+      http(_http),
+      interval(_interval) {}
+
+protected:
+  virtual void initialize() override
+  {
+    heartbeat();
+  }
+
+private:
+  void heartbeat()
+  {
+    // Only send a heartbeat if the connection is not closed.
+    if (http.closed().isPending()) {
+      VLOG(1) << "Sending heartbeat to " << dnsSubscriberId;
+
+      v1::dns::Event event;
+      event.set_type(v1::dns::Event::HEARTBEAT);
+
+      http.send(event);
+    }
+
+    process::delay(interval, self(), &Self::heartbeat);
+  }
+
+  const v1::DNSSubscriberID dnsSubscriberId;
+  DNSHttpConnection http;
+  const Duration interval;
+};
+
+
+struct DNSSubscriber
+{
+  DNSSubscriber(const v1::DNSSubscriberID& _id,
+                const DNSHttpConnection& _http)
+    : id(_id),
+      http(_http) {}
+
+  ~DNSSubscriber()
+  {
+    if (http.isSome()) {
+      closeHttpConnection();
+    }
+  }
+
+  void closeHttpConnection()
+  {
+    CHECK_SOME(http);
+
+    if (!http.get().close()) {
+      LOG(WARNING) << "Failed to close HTTP pipe for DNSSubscriber";
+    }
+
+    http = None();
+
+    CHECK_SOME(heartbeater);
+
+    terminate(heartbeater.get().get());
+    wait(heartbeater.get().get());
+
+    heartbeater = None();
+  }
+
+  void heartbeat()
+  {
+    CHECK_NONE(heartbeater);
+    CHECK_SOME(http);
+
+    // TODO(vinod): Make heartbeat interval configurable and include
+    // this information in the SUBSCRIBED response.
+    heartbeater =
+      new DNSHeartbeater(id, http.get(), DEFAULT_HEARTBEAT_INTERVAL);
+
+    process::spawn(heartbeater.get().get());
+  }
+
+  v1::DNSSubscriberID id;
+
+  Option<DNSHttpConnection> http;
+
+  // This is only set for HTTP frameworks.
+  Option<process::Owned<DNSHeartbeater>> heartbeater;
 };
 
 

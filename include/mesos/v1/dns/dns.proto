@@ -1,0 +1,91 @@
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import "mesos/v1/mesos.proto";
+
+package mesos.v1.dns;
+
+option java_package = "org.apache.mesos.v1.dns";
+option java_outer_classname = "Protos";
+
+
+
+message Event {
+  // Possible event types, followed by message definitions if
+  // applicable.
+  enum Type {
+    SUBSCRIBED = 1; // See 'Subscribed' below.
+    AGENT = 2;
+    TASK = 3;
+
+    // Periodic message sent by the Mesos master according to
+    // 'Subscribed.heartbeat_interval_seconds'. If the scheduler does
+    // not receive any events (including heartbeats) for an extended
+    // period of time (e.g., 5 x heartbeat_interval_seconds), there is
+    // likely a network partition. In such a case the scheduler should
+    // close the existing subscription connection and resubscribe
+    // using a backoff strategy.
+    HEARTBEAT = 8;
+  }
+
+  // First event received when the scheduler subscribes.
+  message Subscribed {
+    required FrameworkID framework_id = 1;
+
+    // This value will be set if the master is sending heartbeats. See
+    // the comment above on 'HEARTBEAT' for more details.
+    optional double heartbeat_interval_seconds = 2;
+  }
+
+  message Agent {
+
+  }
+
+  message Task {
+    required TaskInfo task_info = 1;
+  }
+
+  // Type of the event, indicates which optional field below should be
+  // present if that type has a nested message definition.
+  required Type type = 1;
+
+  optional Subscribed subscribed = 2;
+  optional Agent agent = 3;
+  optional Task task = 4;
+}
+
+
+message Call {
+  // Possible call types, followed by message definitions if
+  // applicable.
+  enum Type {
+    SUBSCRIBE = 1;   // See 'Subscribe' below.
+  }
+
+  message Subscribe {
+    required DNSSubscriberID dns_subscriber_id = 1;
+  }
+
+  optional DNSSubscriberID dns_subscriber_id = 1;
+
+  // Type of the call, indicates which optional field below should be
+  // present if that type has a nested message definition.
+  required Type type = 2;
+
+  optional Subscribe subscribe = 3;
+}

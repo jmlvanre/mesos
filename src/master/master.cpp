@@ -747,6 +747,12 @@ void Master::initialize()
   // Setup HTTP routes.
   Http http = Http(this);
 
+  route("/api/v1/dns",
+        None(),
+        [http](const process::http::Request& request) {
+          Http::log(request);
+          return http.dns(request);
+        });
   route("/api/v1/scheduler",
         Http::SCHEDULER_HELP(),
         [http](const process::http::Request& request) {
@@ -1028,6 +1034,17 @@ void Master::finalize()
 
   if (authenticator.isSome()) {
     delete authenticator.get();
+  }
+}
+
+
+void Master::DNSexited(
+    const v1::DNSSubscriberID& dnsSubscriberId,
+    const DNSHttpConnection& http)
+{
+  if (dnsSubscribers.contains(dnsSubscriberId)) {
+    delete dnsSubscribers[dnsSubscriberId];
+    dnsSubscribers.erase(dnsSubscriberId);
   }
 }
 
@@ -1854,6 +1871,28 @@ void Master::reregisterFramework(
   call.set_force(failover);
 
   subscribe(from, call);
+}
+
+
+void Master::DNSsubscribe(
+    DNSHttpConnection http,
+    const v1::dns::Call::Subscribe& subscribe)
+{
+  // TODO(anand): Authenticate the framework.
+
+  const v1::DNSSubscriberID& dnsSubscriberId = subscribe.dns_subscriber_id();
+
+  LOG(INFO) << "Received subscription request for"
+            << " HTTP DNS '" << dnsSubscriberId << "'";
+
+  if (dnsSubscribers.contains(dnsSubscriberId)) {
+    delete dnsSubscribers[dnsSubscriberId];
+  }
+
+  dnsSubscribers[dnsSubscriberId] = new DNSSubscriber(dnsSubscriberId, http);
+
+  http.closed()
+    .onAny(defer(self(), &Self::DNSexited, dnsSubscriberId, http));
 }
 
 
