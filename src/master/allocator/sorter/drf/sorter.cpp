@@ -95,7 +95,7 @@ void DRFSorter::deactivate(const string& name)
 void DRFSorter::allocated(
     const string& name,
     const SlaveID& slaveId,
-    const Resources& resources)
+    const cpp::Resources& resources)
 {
   set<Client, DRFComparator>::iterator it = find(name);
 
@@ -126,8 +126,8 @@ void DRFSorter::allocated(
 void DRFSorter::update(
     const string& name,
     const SlaveID& slaveId,
-    const Resources& oldAllocation,
-    const Resources& newAllocation)
+    const cpp::Resources& oldAllocation,
+    const cpp::Resources& newAllocation)
 {
   CHECK(contains(name));
 
@@ -159,7 +159,7 @@ void DRFSorter::update(
 }
 
 
-const hashmap<SlaveID, Resources>& DRFSorter::allocation(const string& name)
+const hashmap<SlaveID, cpp::Resources>& DRFSorter::allocation(const string& name)
 {
   CHECK(contains(name));
 
@@ -167,7 +167,7 @@ const hashmap<SlaveID, Resources>& DRFSorter::allocation(const string& name)
 }
 
 
-const Resources& DRFSorter::allocationScalars(const string& name)
+const cpp::Resources& DRFSorter::allocationScalars(const string& name)
 {
   CHECK(contains(name));
 
@@ -175,13 +175,13 @@ const Resources& DRFSorter::allocationScalars(const string& name)
 }
 
 
-hashmap<string, Resources> DRFSorter::allocation(const SlaveID& slaveId)
+hashmap<string, cpp::Resources> DRFSorter::allocation(const SlaveID& slaveId)
 {
   // TODO(jmlvanre): We can index the allocation by slaveId to make this faster.
   // It is a tradeoff between speed vs. memory. For now we use existing data
   // structures.
 
-  hashmap<string, Resources> result;
+  hashmap<string, cpp::Resources> result;
 
   foreachpair (const string& name, const Allocation& allocation, allocations) {
     if (allocation.resources.contains(slaveId)) {
@@ -195,7 +195,7 @@ hashmap<string, Resources> DRFSorter::allocation(const SlaveID& slaveId)
 }
 
 
-Resources DRFSorter::allocation(const string& name, const SlaveID& slaveId)
+cpp::Resources DRFSorter::allocation(const string& name, const SlaveID& slaveId)
 {
   CHECK(contains(name));
 
@@ -203,17 +203,17 @@ Resources DRFSorter::allocation(const string& name, const SlaveID& slaveId)
     return allocations[name].resources[slaveId];
   }
 
-  return Resources();
+  return cpp::Resources();
 }
 
 
-const hashmap<SlaveID, Resources>& DRFSorter::total() const
+const hashmap<SlaveID, cpp::Resources>& DRFSorter::total() const
 {
   return total_.resources;
 }
 
 
-const Resources& DRFSorter::totalScalars() const
+const cpp::Resources& DRFSorter::totalScalars() const
 {
   return total_.scalars;
 }
@@ -222,7 +222,7 @@ const Resources& DRFSorter::totalScalars() const
 void DRFSorter::unallocated(
     const string& name,
     const SlaveID& slaveId,
-    const Resources& resources)
+    const cpp::Resources& resources)
 {
   allocations[name].resources[slaveId] -= resources;
   allocations[name].scalars -= resources.scalars();
@@ -237,7 +237,7 @@ void DRFSorter::unallocated(
 }
 
 
-void DRFSorter::add(const SlaveID& slaveId, const Resources& resources)
+void DRFSorter::add(const SlaveID& slaveId, const cpp::Resources& resources)
 {
   if (!resources.empty()) {
     total_.resources[slaveId] += resources;
@@ -252,7 +252,7 @@ void DRFSorter::add(const SlaveID& slaveId, const Resources& resources)
 }
 
 
-void DRFSorter::remove(const SlaveID& slaveId, const Resources& resources)
+void DRFSorter::remove(const SlaveID& slaveId, const cpp::Resources& resources)
 {
   if (!resources.empty()) {
     CHECK(total_.resources.contains(slaveId));
@@ -269,7 +269,7 @@ void DRFSorter::remove(const SlaveID& slaveId, const Resources& resources)
 }
 
 
-void DRFSorter::update(const SlaveID& slaveId, const Resources& resources)
+void DRFSorter::update(const SlaveID& slaveId, const cpp::Resources& resources)
 {
   CHECK(total_.scalars.contains(total_.resources[slaveId].scalars()));
 

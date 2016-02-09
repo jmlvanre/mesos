@@ -76,37 +76,37 @@ public:
   virtual void allocated(
       const std::string& name,
       const SlaveID& slaveId,
-      const Resources& resources);
+      const cpp::Resources& resources);
 
   virtual void update(
       const std::string& name,
       const SlaveID& slaveId,
-      const Resources& oldAllocation,
-      const Resources& newAllocation);
+      const cpp::Resources& oldAllocation,
+      const cpp::Resources& newAllocation);
 
   virtual void unallocated(
       const std::string& name,
       const SlaveID& slaveId,
-      const Resources& resources);
+      const cpp::Resources& resources);
 
-  virtual const hashmap<SlaveID, Resources>& allocation(
+  virtual const hashmap<SlaveID, cpp::Resources>& allocation(
       const std::string& name);
 
-  virtual const Resources& allocationScalars(const std::string& name);
+  virtual const cpp::Resources& allocationScalars(const std::string& name);
 
-  virtual hashmap<std::string, Resources> allocation(const SlaveID& slaveId);
+  virtual hashmap<std::string, cpp::Resources> allocation(const SlaveID& slaveId);
 
-  virtual Resources allocation(const std::string& name, const SlaveID& slaveId);
+  virtual cpp::Resources allocation(const std::string& name, const SlaveID& slaveId);
 
-  virtual const hashmap<SlaveID, Resources>& total() const;
+  virtual const hashmap<SlaveID, cpp::Resources>& total() const;
 
-  virtual const Resources& totalScalars() const;
+  virtual const cpp::Resources& totalScalars() const;
 
-  virtual void add(const SlaveID& slaveId, const Resources& resources);
+  virtual void add(const SlaveID& slaveId, const cpp::Resources& resources);
 
-  virtual void remove(const SlaveID& slaveId, const Resources& resources);
+  virtual void remove(const SlaveID& slaveId, const cpp::Resources& resources);
 
-  virtual void update(const SlaveID& slaveId, const Resources& resources);
+  virtual void update(const SlaveID& slaveId, const cpp::Resources& resources);
 
   virtual std::list<std::string> sort();
 
@@ -137,20 +137,20 @@ private:
 
   // Total resources.
   struct Total {
-    hashmap<SlaveID, Resources> resources;
+    hashmap<SlaveID, cpp::Resources> resources;
 
     // NOTE: Scalars can be safely aggregated across slaves. We keep
     // that to speed up the calculation of shares. See MESOS-2891 for
     // the reasons why we want to do that.
-    Resources scalars;
+    cpp::Resources scalars;
   } total_;
 
   // Allocation for a client.
   struct Allocation {
-    hashmap<SlaveID, Resources> resources;
+    hashmap<SlaveID, cpp::Resources> resources;
 
     // Similarly, we aggregated scalars across slaves. See note above.
-    Resources scalars;
+    cpp::Resources scalars;
   };
 
   // Maps client names to the resources they have been allocated.

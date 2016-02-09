@@ -237,7 +237,7 @@ protected:
   bool isFiltered(
       const FrameworkID& frameworkId,
       const SlaveID& slaveId,
-      const Resources& resources);
+      const cpp::Resources& resources);
 
   // Returns true if there is an inverse offer filter for this framework
   // on this slave.
@@ -245,7 +245,7 @@ protected:
       const FrameworkID& frameworkID,
       const SlaveID& slaveID);
 
-  bool allocatable(const Resources& resources);
+  bool allocatable(const cpp::Resources& resources);
 
   bool initialized;
   bool paused;
@@ -306,7 +306,7 @@ protected:
   struct Slave
   {
     // Total amount of regular *and* oversubscribed resources.
-    Resources total;
+    cpp::Resources total;
 
     // Regular *and* oversubscribed resources that are allocated.
     //
@@ -314,7 +314,7 @@ protected:
     // having that information in sorters. This is because the
     // information in sorters is not accurate if some framework
     // hasn't reregistered. See MESOS-2919 for details.
-    Resources allocated;
+    cpp::Resources allocated;
 
     // We track the total and allocated resources on the slave, the
     // available resources are computed as follows:

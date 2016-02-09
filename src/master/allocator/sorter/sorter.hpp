@@ -23,6 +23,8 @@
 #include <mesos/resources.hpp>
 #include <mesos/type_utils.hpp>
 
+#include "common/resources_utils.hpp"
+
 namespace mesos {
 namespace internal {
 namespace master {
@@ -60,7 +62,7 @@ public:
   virtual void allocated(
       const std::string& client,
       const SlaveID& slaveId,
-      const Resources& resources) = 0;
+      const cpp::Resources& resources) = 0;
 
   // Updates a portion of the allocation for the client, in order to
   // augment the resources with additional metadata (e.g., volumes)
@@ -69,47 +71,47 @@ public:
   virtual void update(
       const std::string& client,
       const SlaveID& slaveId,
-      const Resources& oldAllocation,
-      const Resources& newAllocation) = 0;
+      const cpp::Resources& oldAllocation,
+      const cpp::Resources& newAllocation) = 0;
 
   // Specify that resources have been unallocated from the given client.
   virtual void unallocated(
       const std::string& client,
       const SlaveID& slaveId,
-      const Resources& resources) = 0;
+      const cpp::Resources& resources) = 0;
 
   // Returns the resources that have been allocated to this client.
-  virtual const hashmap<SlaveID, Resources>& allocation(
+  virtual const hashmap<SlaveID, cpp::Resources>& allocation(
       const std::string& client) = 0;
 
   // Returns the sum of the scalar resources that are allocated to this client.
-  virtual const Resources& allocationScalars(const std::string& client) = 0;
+  virtual const cpp::Resources& allocationScalars(const std::string& client) = 0;
 
   // Returns the clients that have allocations on this slave.
-  virtual hashmap<std::string, Resources> allocation(
+  virtual hashmap<std::string, cpp::Resources> allocation(
       const SlaveID& slaveId) = 0;
 
   // Returns the given slave's resources that have been allocated to
   // this client.
-  virtual Resources allocation(
+  virtual cpp::Resources allocation(
       const std::string& client,
       const SlaveID& slaveId) = 0;
 
   // Returns the total resources that are in this sorter.
-  virtual const hashmap<SlaveID, Resources>& total() const = 0;
+  virtual const hashmap<SlaveID, cpp::Resources>& total() const = 0;
 
   // Returns the sum of the total scalar resources that are in this sorter.
-  virtual const Resources& totalScalars() const = 0;
+  virtual const cpp::Resources& totalScalars() const = 0;
 
   // Add resources to the total pool of resources this
   // Sorter should consider.
-  virtual void add(const SlaveID& slaveId, const Resources& resources) = 0;
+  virtual void add(const SlaveID& slaveId, const cpp::Resources& resources) = 0;
 
   // Remove resources from the total pool.
-  virtual void remove(const SlaveID& slaveId, const Resources& resources) = 0;
+  virtual void remove(const SlaveID& slaveId, const cpp::Resources& resources) = 0;
 
   // Updates the total pool of resources.
-  virtual void update(const SlaveID& slaveId, const Resources& resources) = 0;
+  virtual void update(const SlaveID& slaveId, const cpp::Resources& resources) = 0;
 
   // Returns a list of all clients, in the order that they
   // should be allocated to, according to this Sorter's policy.

@@ -20,7 +20,64 @@
 
 #include "common/resources_utils.hpp"
 
+using std::string;
+
 namespace mesos {
+
+namespace cpp {
+
+Option<double> Resources::cpus() const
+{
+  Option<Value::Scalar> value = get<Value::Scalar>("cpus");
+  if (value.isSome()) {
+    return value.get().value();
+  } else {
+    return None();
+  }
+}
+
+
+Option<Bytes> Resources::mem() const
+{
+  Option<Value::Scalar> value = get<Value::Scalar>("mem");
+  if (value.isSome()) {
+    return Megabytes(static_cast<uint64_t>(value.get().value()));
+  } else {
+    return None();
+  }
+}
+
+
+bool Resources::isReserved(
+    const Resource& resource,
+    const Option<string>& role)
+{
+  if (role.isSome()) {
+    return !isUnreserved(resource) && role.get() == resource.role();
+  } else {
+    return !isUnreserved(resource);
+  }
+}
+
+
+bool Resources::isUnreserved(const Resource& resource)
+{
+  return resource.role() == "*" && !resource.has_reservation();
+}
+
+
+Resources Resources::reserved(const string& role) const
+{
+  return filter(lambda::bind(isReserved, lambda::_1, role));
+}
+
+
+Resources Resources::unreserved() const
+{
+  return filter(isUnreserved);
+}
+
+} // namespace cpp
 
 bool needCheckpointing(const Resource& resource)
 {

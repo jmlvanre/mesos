@@ -20,9 +20,643 @@
 #include <mesos/mesos.hpp>
 #include <mesos/resources.hpp>
 
+#include <stout/interval.hpp>
 #include <stout/try.hpp>
 
 namespace mesos {
+
+namespace cpp {
+
+class Volume
+{
+public:
+  enum Mode
+  {
+    RW,
+    RO
+  };
+
+  Volume(const ::mesos::Volume& volume)
+    : container_path_(volume.container_path())
+  {
+    switch (volume.mode()) {
+      case ::mesos::Volume::RW: {
+        mode_ = RW;
+        break;
+      }
+      case ::mesos::Volume::RO: {
+        mode_ = RO;
+        break;
+      }
+    }
+
+    if (volume.has_host_path()) {
+      host_path_ = volume.host_path();
+    }
+
+    if (volume.has_image()) {
+      image_ = volume.image();
+    }
+  }
+
+private:
+  Mode mode_;
+  std::string container_path_;
+  Option<std::string> host_path_;
+  Option<Image> image_;
+};
+
+class Resource
+{
+public:
+  class Value
+  {
+  public:
+    enum Type
+    {
+      SCALAR,
+      RANGES,
+      SET,
+      TEXT
+    } type_;
+
+    Value(double scalar) : type_(SCALAR), scalar_(scalar) {}
+
+    Value(const ::mesos::Value::Ranges& ranges) : type_(RANGES), ranges_()
+    {
+      foreach (const ::mesos::Value::Range& range, ranges.range()) {
+        const Interval<uint64_t> interval =
+          (Bound<uint64_t>::closed(range.begin()),
+           Bound<uint64_t>::closed(range.end()));
+
+        ranges_ += interval;
+      }
+    }
+
+    Value(const ::mesos::Value::Set& set)
+      : type_(SET),
+        set_(set.item().begin(), set.item().end()) {}
+
+    Value(const ::mesos::Value::Text& text) : type_(TEXT), text_(text.value()) {}
+
+    Value(const Value& that) : Value(0.0)
+    {
+      *this = that;
+    }
+
+    ~Value()
+    {
+      switch (type_) {
+        case SCALAR: {
+          // Do nothing.
+          break;
+        }
+        case RANGES: {
+          ranges_.~IntervalSet<uint64_t>();
+          break;
+        }
+        case SET: {
+          set_.~unordered_set<std::string>();
+          break;
+        }
+        case TEXT: {
+          text_.~basic_string<char>();
+          break;
+        }
+      }
+    }
+
+    Value& operator=(const Value& that)
+    {
+      if (this != &that) {
+        this->~Value();
+
+        type_ = that.type_;
+
+        switch (that.type_) {
+          case SCALAR: {
+            scalar_ = that.scalar_;
+            break;
+          }
+          case RANGES: {
+            new (&ranges_) IntervalSet<uint64_t>(that.ranges_);
+            break;
+          }
+          case SET: {
+            new (&set_) std::unordered_set<std::string>(that.set_);
+            break;
+          }
+          case TEXT: {
+            new (&text_) std::string(that.text_);
+            break;
+          }
+        }
+      }
+
+      return *this;
+    }
+
+  private:
+    union {
+      double scalar_;
+      IntervalSet<uint64_t> ranges_;
+      std::unordered_set<std::string> set_;
+      std::string text_;
+    };
+  };
+
+  struct ReservationInfo
+  {
+    Option<std::string> principal_;
+
+    ReservationInfo(const ::mesos::Resource::ReservationInfo& reservation)
+    {
+      if (reservation.has_principal()) {
+        principal_ = reservation.principal();
+      }
+    }
+  };
+
+  class DiskInfo
+  {
+  public:
+    class Persistence
+    {
+    public:
+      Persistence(const ::mesos::Resource::DiskInfo::Persistence& persistence)
+        : id_(persistence.id())
+      {
+        if (persistence.has_principal()) {
+          principal_ = persistence.principal();
+        }
+      }
+
+    private:
+      std::string id_;
+
+      Option<std::string> principal_;
+    };
+
+    class Source
+    {
+    public:
+      enum Type
+      {
+        PATH,
+        MOUNT
+      } type_;
+
+      Source(const ::mesos::Resource::DiskInfo::Source& source)
+        : type_(source.type() == ::mesos::Resource::DiskInfo::Source::PATH ?
+                 PATH : MOUNT) {
+        switch (type_) {
+          case PATH: {
+            root_ = source.path().root();
+            break;
+          }
+          case MOUNT: {
+            root_ = source.mount().root();
+            break;
+          }
+        }
+      }
+
+    private:
+      std::string root_;
+    };
+
+    DiskInfo(const ::mesos::Resource::DiskInfo& disk)
+    {
+      if (disk.has_persistence()) {
+        persistence_ = Persistence(disk.persistence());
+      }
+
+      if (disk.has_volume()) {
+        volume_ = Volume(disk.volume());
+      }
+
+      if (disk.has_source()) {
+        source_ = Source(disk.source());
+      }
+    }
+
+  private:
+    Option<Persistence> persistence_;
+
+    Option<Volume> volume_;
+
+    Option<Source> source_;
+  };
+
+  class RevocableInfo {};
+
+  Resource(const ::mesos::Resource& resource)
+    : name_(resource.name()), value_(0.0)
+  {
+    switch (resource.type()) {
+      case ::mesos::Value::SCALAR: {
+        value_ = Value(resource.scalar().value());
+        break;
+      }
+      case ::mesos::Value::RANGES: {
+        value_ = Value(resource.ranges());
+        break;
+      }
+      case ::mesos::Value::SET: {
+        value_ = Value(resource.set());
+        break;
+      }
+      case ::mesos::Value::TEXT: {
+        ABORT("This shouldn't be possible if the proto is validated before we "
+              "convert inside the factory");
+        break;
+      }
+    }
+
+    if (resource.has_role()) {
+      role_ = resource.role();
+    }
+
+    if (resource.has_reservation()) {
+      reservation_ = ReservationInfo(resource.reservation());
+    }
+
+    if (resource.has_disk()) {
+      disk_ = DiskInfo(resource.disk());
+    }
+
+    if (resource.has_revocable()) {
+      revocable_ = RevocableInfo();
+    }
+  }
+
+  Resource(const Resource& that)
+    : name_(that.name_),
+      value_(that.value_),
+      role_(that.role_),
+      reservation_(that.reservation_),
+      disk_(that.disk_),
+      revocable_(that.revocable_) {}
+
+  const std::string& role() const
+  {
+    static std::string defaultRole = "*";
+    return role_.isSome() ? role_.get() : defaultRole;
+  }
+
+  void set_role(const std::string& role) { role_ = role; }
+
+  void clear_reservation() { reservation_ = None(); }
+
+  void clear_disk() { disk_ = None(); }
+
+private:
+
+  std::string name_;
+
+  Value value_;
+
+  Option<std::string> role_;
+
+  Option<ReservationInfo> reservation_;
+
+  Option<DiskInfo> disk_;
+
+  Option<RevocableInfo> revocable_;
+};
+
+class Resources
+{
+public:
+  /**
+   * Returns a Resource with the given name, value, and role.
+   *
+   * Parses the text and returns a Resource object with the given name, value,
+   * and role. For example, "Resource r = parse("mem", "1024", "*");".
+   *
+   * @param name The name of the Resource.
+   * @param value The Resource's value.
+   * @param role The role associated with the Resource.
+   * @return A `Try` which contains the parsed Resource if parsing was
+   *     successful, or an Error otherwise.
+   */
+  static Try<Resource> parse(
+      const std::string& name,
+      const std::string& value,
+      const std::string& role);
+
+  /**
+   * Parses Resources from an input string.
+   *
+   * Parses Resources from text in the form of a JSON array. If that fails,
+   * parses text in the form "name(role):value;name:value;...". Any resource
+   * that doesn't specify a role is assigned to the provided default role. See
+   * the `Resource` protobuf definition for precise JSON formatting.
+   *
+   * Example JSON: [{"name":cpus","type":"SCALAR","scalar":{"value":8}}]
+   *
+   * @param text The input string.
+   * @param defaultRole The default role.
+   * @return A `Try` which contains the parsed Resources if parsing was
+   *     successful, or an Error otherwise.
+   */
+  static Try<Resources> parse(
+      const std::string& text,
+      const std::string& defaultRole = "*");
+
+  /**
+   * Validates a Resource object.
+   *
+   * Validates the given Resource object. Returns Error if it is not valid. A
+   * Resource object is valid if it has a name, a valid type, i.e. scalar,
+   * range, or set, has the appropriate value set, and a valid (role,
+   * reservation) pair for dynamic reservation.
+   *
+   * @param resource The input resource to be validated.
+   * @return An `Option` which contains None() if the validation was successful,
+   *     or an Error if not.
+   */
+  static Option<Error> validate(const Resource& resource);
+
+  /**
+   * Validates the given repeated Resource protobufs.
+   *
+   * Validates the given repeated Resource protobufs. Returns Error if an
+   * invalid Resource is found. A Resource object is valid if it has a name, a
+   * valid type, i.e. scalar, range, or set, has the appropriate value set, and
+   * a valid (role, reservation) pair for dynamic reservation.
+   *
+   * TODO(jieyu): Right now, it's the same as checking each individual Resource
+   * object in the protobufs. In the future, we could add more checks that are
+   * not possible if checking each Resource object individually. For example, we
+   * could check multiple usage of an item in a set or a range, etc.
+   *
+   * @param resources The repeated Resource objects to be validated.
+   * @return An `Option` which contains None() if the validation was successful,
+   *     or an Error if not.
+   */
+  static Option<Error> validate(
+      const google::protobuf::RepeatedPtrField<Resource>& resources);
+
+  // NOTE: The following predicate functions assume that the given
+  // resource is validated.
+  //
+  // Valid states of (role, reservation) pair in the Resource object.
+  //   Unreserved         : ("*", None)
+  //   Static reservation : (R, None)
+  //   Dynamic reservation: (R, { principal: <framework_principal> })
+  //
+  // NOTE: ("*", { principal: <framework_principal> }) is invalid.
+
+  // Tests if the given Resource object is empty.
+  static bool isEmpty(const Resource& resource);
+
+  // Tests if the given Resource object is a persistent volume.
+  static bool isPersistentVolume(const Resource& resource);
+
+  // Tests if the given Resource object is reserved. If the role is
+  // specified, tests that it's reserved for the given role.
+  static bool isReserved(
+      const Resource& resource,
+      const Option<std::string>& role = None());
+
+  // Tests if the given Resource object is unreserved.
+  static bool isUnreserved(const Resource& resource);
+
+  // Tests if the given Resource object is dynamically reserved.
+  static bool isDynamicallyReserved(const Resource& resource);
+
+  // Tests if the given Resource object is revocable.
+  static bool isRevocable(const Resource& resource);
+
+  // Returns the summed up Resources given a hashmap<Key, Resources>.
+  //
+  // NOTE: While scalar resources such as "cpus" sum correctly,
+  // non-scalar resources such as "ports" do not.
+  //   e.g. "cpus:2" + "cpus:1" = "cpus:3"
+  //        "ports:[0-100]" + "ports:[0-100]" = "ports:[0-100]"
+  //
+  // TODO(mpark): Deprecate this function once we introduce the
+  // concept of "cluster-wide" resources which provides correct
+  // semantics for summation over all types of resources. (e.g.
+  // non-scalar)
+  template <typename Key>
+  static Resources sum(const hashmap<Key, Resources>& _resources)
+  {
+    Resources result;
+
+    foreachvalue (const Resources& resources, _resources) {
+      result += resources;
+    }
+
+    return result;
+  }
+
+  Resources() {}
+
+  // TODO(jieyu): Consider using C++11 initializer list.
+  /*implicit*/ Resources(const Resource& resource);
+
+  /*implicit*/
+  Resources(const std::vector<Resource>& _resources);
+
+  /*implicit*/
+  Resources(const google::protobuf::RepeatedPtrField<Resource>& _resources);
+
+  Resources(const Resources& that) : resources(that.resources) {}
+
+  Resources(const ::mesos::Resources& that) : resources(that.begin(), that.end()) {}
+
+  Resources& operator=(const Resources& that)
+  {
+    if (this != &that) {
+      resources = that.resources;
+    }
+    return *this;
+  }
+
+  bool empty() const { return resources.size() == 0; }
+
+  size_t size() const { return resources.size(); }
+
+  // Checks if this Resources is a superset of the given Resources.
+  bool contains(const Resources& that) const;
+
+  // Checks if this Resources contains the given Resource.
+  bool contains(const Resource& that) const;
+
+  // Filter resources based on the given predicate.
+  Resources filter(
+      const lambda::function<bool(const Resource&)>& predicate) const;
+
+  // Returns the reserved resources, by role.
+  hashmap<std::string, Resources> reserved() const;
+
+  // Returns the reserved resources for the role. Note that the "*"
+  // role represents unreserved resources, and will be ignored.
+  Resources reserved(const std::string& role) const;
+
+  // Returns the unreserved resources.
+  Resources unreserved() const;
+
+  // Returns the persistent volumes.
+  Resources persistentVolumes() const;
+
+  // Returns the revocable resources.
+  Resources revocable() const;
+
+  // Returns the non-revocable resources, effectively !revocable().
+  Resources nonRevocable() const;
+
+  // Returns a Resources object with the same amount of each resource
+  // type as these Resources, but with all Resource objects marked as
+  // the specified (role, reservation) pair. This is used to cross
+  // reservation boundaries without affecting the actual resources.
+  // If the optional ReservationInfo is given, the resource's
+  // 'reservation' field is set. Otherwise, the resource's
+  // 'reservation' field is cleared.
+  Resources flatten(
+      const std::string& role = "*",
+      const Option<Resource::ReservationInfo>& reservation = None()) const;
+
+  // Finds a Resources object with the same amount of each resource
+  // type as "targets" from these Resources. The roles specified in
+  // "targets" set the preference order. For each resource type,
+  // resources are first taken from the specified role, then from '*',
+  // then from any other role.
+  // TODO(jieyu): 'find' contains some allocation logic for scalars and
+  // fixed set / range elements. However, this is not sufficient for
+  // schedulers that want, say, any N available ports. We should
+  // consider moving this to an internal "allocation" library for our
+  // example frameworks to leverage.
+  Option<Resources> find(const Resources& targets) const;
+
+  // Certain offer operations (e.g., RESERVE, UNRESERVE, CREATE or
+  // DESTROY) alter the offered resources. The following methods
+  // provide a convenient way to get the transformed resources by
+  // applying the given offer operation(s). Returns an Error if the
+  // offer operation(s) cannot be applied.
+  Try<Resources> apply(const Offer::Operation& operation) const;
+
+  template <typename Iterable>
+  Try<Resources> apply(const Iterable& operations) const
+  {
+    Resources result = *this;
+
+    foreach (const Offer::Operation& operation, operations) {
+      Try<Resources> transformed = result.apply(operation);
+      if (transformed.isError()) {
+        return Error(transformed.error());
+      }
+
+      result = transformed.get();
+    }
+
+    return result;
+  }
+
+  // Helpers to get resource values. We consider all roles here.
+  template <typename T>
+  Option<T> get(const std::string& name) const;
+
+  // Get resources of the given name.
+  Resources get(const std::string& name) const;
+
+  // Get all the resources that are scalars.
+  Resources scalars() const;
+
+  // Get the set of unique resource names.
+  std::set<std::string> names() const;
+
+  // Get the types of resources associated with each resource name.
+  // NOTE: Resources of the same name must have the same type, as
+  // enforced by Resources::parse().
+  std::map<std::string, Value_Type> types() const;
+
+  // Helpers to get known resource types.
+  // TODO(vinod): Fix this when we make these types as first class
+  // protobufs.
+  Option<double> cpus() const;
+  Option<Bytes> mem() const;
+  Option<Bytes> disk() const;
+
+  // TODO(vinod): Provide a Ranges abstraction.
+  Option<Value::Ranges> ports() const;
+
+  // TODO(jieyu): Consider returning an EphemeralPorts abstraction
+  // which holds the ephemeral ports allocation logic.
+  Option<Value::Ranges> ephemeral_ports() const;
+
+  // NOTE: Non-`const` `iterator`, `begin()` and `end()` are __intentionally__
+  // defined with `const` semantics in order to prevent mutable access to the
+  // `Resource` objects within `resources`.
+  typedef std::vector<Resource>::const_iterator
+  iterator;
+
+  typedef std::vector<Resource>::const_iterator
+  const_iterator;
+
+  const_iterator begin()
+  {
+    return static_cast<const std::vector<Resource>&>(resources).begin();
+  }
+
+  const_iterator end()
+  {
+    return static_cast<const std::vector<Resource>&>(resources).end();
+  }
+
+  const_iterator begin() const { return resources.begin(); }
+  const_iterator end() const { return resources.end(); }
+
+  // Using this operator makes it easy to copy a resources object into
+  // a protocol buffer field.
+  //operator const google::protobuf::RepeatedPtrField<Resource>&() const;
+
+  bool operator==(const Resources& that) const;
+  bool operator!=(const Resources& that) const;
+
+  // NOTE: If any error occurs (e.g., input Resource is not valid or
+  // the first operand is not a superset of the second oprand while
+  // doing subtraction), the semantics is as though the second operand
+  // was actually just an empty resource (as though you didn't do the
+  // operation at all).
+  Resources operator+(const Resource& that) const;
+  Resources operator+(const Resources& that) const;
+  Resources& operator+=(const Resource& that);
+  Resources& operator+=(const Resources& that);
+
+  Resources operator-(const Resource& that) const;
+  Resources operator-(const Resources& that) const;
+  Resources& operator-=(const Resource& that);
+  Resources& operator-=(const Resources& that);
+
+  ::mesos::Resources proto() const;
+
+private:
+  // Similar to 'contains(const Resource&)' but skips the validity
+  // check. This can be used to avoid the performance overhead of
+  // calling 'contains(const Resource&)' when the resource can be
+  // assumed valid (e.g. it's inside a Resources).
+  //
+  // TODO(jieyu): Measure performance overhead of validity check to
+  // ensure this is warranted.
+  bool _contains(const Resource& that) const;
+
+  // Similar to the public 'find', but only for a single Resource
+  // object. The target resource may span multiple roles, so this
+  // returns Resources.
+  Option<Resources> find(const Resource& target) const;
+
+  std::vector<Resource> resources;
+};
+
+std::ostream& operator<<(std::ostream& stream, const Resource& resource);
+
+
+std::ostream& operator<<(std::ostream& stream, const Resources& resources);
+
+} // namespace cpp {
 
 // Tests if the given Resource needs to be checkpointed on the slave.
 // NOTE: We assume the given resource is validated.
