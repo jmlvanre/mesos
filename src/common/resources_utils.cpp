@@ -82,7 +82,7 @@ Resource::Resource(const ::mesos::Resource& resource)
 
 bool operator==(const Resource& left, const Resource& right)
 {
-  if (left.name() != right.name() ||
+  if (left.name_code() != right.name_code() ||
       left.type() != right.type() ||
       left.role() != right.role()) {
     return false;
@@ -127,7 +127,7 @@ namespace internal {
 // different name, type or role are not addable.
 static bool addable(const Resource& left, const Resource& right)
 {
-  if (left.name() != right.name() ||
+  if (left.name_code() != right.name_code() ||
       left.type() != right.type() ||
       left.role() != right.role()) {
     return false;
@@ -184,7 +184,7 @@ static bool addable(const Resource& left, const Resource& right)
 // contain "right".
 static bool subtractable(const Resource& left, const Resource& right)
 {
-  if (left.name() != right.name() ||
+  if (left.name_code() != right.name_code() ||
       left.type() != right.type() ||
       left.role() != right.role()) {
     return false;
@@ -255,11 +255,12 @@ static bool usable(const Resource& resource)
 template <>
 Option<double> Resources::get(const string& name) const
 {
+  const uint64_t name_code = Resource::__names->getKey(name);
   double result = 0.0;
   bool found = false;
 
   foreach (const Resource& resource, resources) {
-    if (resource.name() == name &&
+    if (resource.name_code() == name_code &&
         resource.type() == Resource::Value::SCALAR) {
       result += resource.scalar();
       found = true;
@@ -277,11 +278,12 @@ Option<double> Resources::get(const string& name) const
 template <>
 Option<IntervalSet<u_int64_t>> Resources::get(const string& name) const
 {
+  const uint64_t name_code = Resource::__names->getKey(name);
   IntervalSet<uint64_t> result;
   bool found = false;
 
   foreach (const Resource& resource, resources) {
-    if (resource.name() == name &&
+    if (resource.name_code() == name_code &&
         resource.type() == Resource::Value::RANGES) {
       result += resource.ranges();
       found = true;
@@ -298,8 +300,9 @@ Option<IntervalSet<u_int64_t>> Resources::get(const string& name) const
 
 Resources Resources::get(const string& name) const
 {
+  const uint64_t name_code = Resource::__names->getKey(name);
   return filter([=](const Resource& resource) {
-    return resource.name() == name;
+    return resource.name_code() == name_code;
   });
 }
 

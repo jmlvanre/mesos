@@ -689,7 +689,11 @@ private:
     std::vector<std::string> keys;
   };
 
+public:
+
   static THREAD_LOCAL Names* __names;
+
+private:
 
   uint64_t name_;
 
