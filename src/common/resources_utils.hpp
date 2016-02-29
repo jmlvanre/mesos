@@ -17,10 +17,14 @@
 #ifndef __RESOURCES_UTILS_HPP__
 #define __RESOURCES_UTILS_HPP__
 
+#include <mutex>
+
 #include <mesos/mesos.hpp>
 #include <mesos/resources.hpp>
 
 #include <stout/interval.hpp>
+#include <stout/synchronized.hpp>
+#include <stout/thread_local.hpp>
 #include <stout/try.hpp>
 
 namespace mesos {
@@ -570,7 +574,9 @@ public:
 
   const std::string& text() const { return value_.text(); }
 
-  const std::string& name() const { return name_; }
+  inline const std::string& name() const;
+
+  uint64_t name_code() const { return name_; }
 
   bool has_reservation() const { return reservation_.isSome(); }
 
@@ -606,9 +612,86 @@ public:
     return *this;
   }
 
+  static uint64_t max_names() { return __names->max_names(); }
+
 private:
 
-  std::string name_;
+  struct Names
+  {
+  private:
+    struct GlobalNames
+    {
+      GlobalNames() : max_names_(0) {}
+
+      std::vector<std::string> getKey(const std::string& key)
+      {
+        synchronized (mutex) {
+          auto pos = keys.find(key);
+          if (pos != keys.end()) {
+            return codes;
+          } else {
+            ++max_names_;
+            keys.emplace(key, codes.size());
+            codes.emplace_back(key);
+            return codes;
+          }
+        }
+      }
+
+      std::vector<std::string> getCodes()
+      {
+        synchronized (mutex) {
+          return codes;
+        }
+      }
+
+      uint64_t max_names() const
+      {
+        return max_names_.load();
+      }
+
+    private:
+      std::unordered_map<std::string, uint64_t> keys;
+      std::vector<std::string> codes;
+      std::mutex mutex;
+      std::atomic<uint64_t> max_names_;
+    };
+
+    static GlobalNames* __global_names;
+
+  public:
+
+    uint64_t getKey(const std::string& key)
+    {
+      for (size_t k = 0; k < keys.size(); ++k) {
+        if (keys[k] == key) { return k; }
+      }
+
+      keys = __global_names->getKey(key);
+      return getKey(key);
+    }
+
+    const std::string& getName(uint64_t code)
+    {
+      if(code >= keys.size()) {
+        keys = __global_names->getCodes();
+      }
+
+      assert(code < keys.size());
+
+      return keys[code];
+    }
+
+    uint64_t max_names() const { return __global_names->max_names(); }
+
+  private:
+
+    std::vector<std::string> keys;
+  };
+
+  static THREAD_LOCAL Names* __names;
+
+  uint64_t name_;
 
   Value value_;
 
@@ -620,6 +703,13 @@ private:
 
   Option<RevocableInfo> revocable_;
 };
+
+
+inline const std::string& Resource::name() const
+{
+  return __names->getName(name_);
+}
+
 
 class Resources
 {

@@ -352,6 +352,45 @@ double DRFSorter::calculateShare(const string& name)
   // currently does not take into account resources that are not
   // scalars.
 
+  const uint64_t max_names = cpp::Resource::max_names();
+
+  const size_t work_size = sizeof(double) * 2 * max_names;
+
+  THREAD_LOCAL double* work = NULL;
+  work =
+    reinterpret_cast<double*>(realloc(work, work_size));
+
+  memset(work, 0, work_size);
+
+  foreach (const cpp::Resource& resource, total_.scalars) {
+    work[2 * resource.name_code()] += resource.scalar();
+  }
+
+  foreach (const cpp::Resource& resource, allocations[name].scalars) {
+    work[2 * resource.name_code() + 1] += resource.scalar();
+  }
+
+  for (uint64_t i = 0; i < max_names; ++i) {
+    const double total = work[2 * i];
+    if (total != 0) {
+      const double allocation = work[2 * i + 1];
+      share = std::max(share, allocation / total);
+    }
+  }
+
+  return share / weights[name];
+}
+
+
+#if 0
+double DRFSorter::calculateShare(const string& name)
+{
+  double share = 0.0;
+
+  // TODO(benh): This implementation of "dominant resource fairness"
+  // currently does not take into account resources that are not
+  // scalars.
+
   foreach (const string& scalar, total_.scalars.names()) {
     // We collect the scalar accumulated total value from the
     // `Resources` object.
@@ -383,6 +422,7 @@ double DRFSorter::calculateShare(const string& name)
 
   return share / weights[name];
 }
+#endif
 
 
 set<Client, DRFComparator>::iterator DRFSorter::find(const string& name)

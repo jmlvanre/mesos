@@ -33,8 +33,12 @@ namespace mesos {
 
 namespace cpp {
 
+THREAD_LOCAL Resource::Names* Resource::__names = new Resource::Names();
+
+Resource::Names::GlobalNames* Resource::Names::__global_names = new Resource::Names::GlobalNames();
+
 Resource::Resource(const ::mesos::Resource& resource)
-  : name_(resource.name()), value_(0.0)
+  : name_(__names->getKey(resource.name())), value_(0.0)
 {
   switch (resource.type()) {
     case ::mesos::Value::SCALAR: {
