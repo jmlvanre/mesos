@@ -538,45 +538,7 @@ public:
 
   class RevocableInfo {};
 
-  Resource(const ::mesos::Resource& resource)
-    : name_(resource.name()), value_(0.0)
-  {
-    switch (resource.type()) {
-      case ::mesos::Value::SCALAR: {
-        value_ = Value(resource.scalar().value());
-        break;
-      }
-      case ::mesos::Value::RANGES: {
-        value_ = Value(resource.ranges());
-        break;
-      }
-      case ::mesos::Value::SET: {
-        value_ = Value(resource.set());
-        break;
-      }
-      case ::mesos::Value::TEXT: {
-        ABORT("This shouldn't be possible if the proto is validated before we "
-              "convert inside the factory");
-        break;
-      }
-    }
-
-    if (resource.has_role()) {
-      role_ = resource.role();
-    }
-
-    if (resource.has_reservation()) {
-      reservation_ = ReservationInfo(resource.reservation());
-    }
-
-    if (resource.has_disk()) {
-      disk_ = DiskInfo(resource.disk());
-    }
-
-    if (resource.has_revocable()) {
-      revocable_ = RevocableInfo();
-    }
-  }
+  Resource(const ::mesos::Resource& resource);
 
   Resource(const Resource& that)
     : name_(that.name_),

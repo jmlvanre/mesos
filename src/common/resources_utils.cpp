@@ -33,6 +33,49 @@ namespace mesos {
 
 namespace cpp {
 
+Resource::Resource(const ::mesos::Resource& resource)
+  : name_(resource.name()), value_(0.0)
+{
+  switch (resource.type()) {
+    case ::mesos::Value::SCALAR: {
+      value_ = Value(resource.scalar().value());
+      break;
+    }
+    case ::mesos::Value::RANGES: {
+      value_ = Value(resource.ranges());
+      break;
+    }
+    case ::mesos::Value::SET: {
+      value_ = Value(resource.set());
+      break;
+    }
+    case ::mesos::Value::TEXT: {
+      ABORT("This shouldn't be possible if the proto is validated before we "
+            "convert inside the factory");
+      break;
+    }
+  }
+
+  if (resource.has_role()) {
+    role_ = resource.role();
+  }
+
+  if (resource.has_reservation()) {
+    reservation_ = ReservationInfo(resource.reservation());
+  }
+
+  if (resource.has_disk()) {
+    disk_ = DiskInfo(resource.disk());
+  }
+
+  if (resource.has_revocable()) {
+    revocable_ = RevocableInfo();
+  }
+
+  CHECK(Resources::validate(*this).isNone());
+}
+
+
 bool operator==(const Resource& left, const Resource& right)
 {
   if (left.name() != right.name() ||
@@ -194,6 +237,12 @@ static bool contains(const Resource& left, const Resource& right)
   }
 
   return right.value() <= left.value();
+}
+
+
+static bool usable(const Resource& resource)
+{
+  return ((resource.type() != Resource::Value::SCALAR) || !(resource.scalar() < 0));
 }
 
 } // namespace internal {
@@ -394,7 +443,11 @@ Option<Error> Resources::validate(const Resource& resource)
     return Error("Invalid resource type");
   }
 
-  if (resource.type() == Resource::Value::TEXT) {
+  if (resource.type() == Resource::Value::SCALAR) {
+    if (resource.scalar() < 0) {
+      return Error("Invalid scalar resource: value < 0");
+    }
+  } else if (resource.type() == Resource::Value::TEXT) {
     // Resource doesn't support TEXT or other value types.
     return Error("Unsupported resource type");
   }
@@ -477,7 +530,9 @@ bool Resources::contains(const Resource& that) const
   // NOTE: We must validate 'that' because invalid resources can lead
   // to false positives here (e.g., "cpus:-1" will return true). This
   // is because 'contains' assumes resources are valid.
-  return validate(that).isNone() && _contains(that);
+  //return validate(that).isNone() && _contains(that);
+
+  return internal::usable(that) && _contains(that);
 }
 
 
@@ -737,7 +792,7 @@ Resources Resources::operator+(const Resources& that) const
 
 Resources& Resources::operator+=(const Resource& that)
 {
-  if (validate(that).isNone() && !isEmpty(that)) {
+  if (internal::usable(that) && !isEmpty(that)) {
     bool found = false;
     foreach (Resource& resource, resources) {
       if (internal::addable(resource, that)) {
@@ -785,7 +840,7 @@ Resources Resources::operator-(const Resources& that) const
 
 Resources& Resources::operator-=(const Resource& that)
 {
-  if (validate(that).isNone() && !isEmpty(that)) {
+  if (internal::usable(that) && !isEmpty(that)) {
     for (int i = 0; i < resources.size(); i++) {
       Resource& resource = resources[i];
 
@@ -795,7 +850,7 @@ Resources& Resources::operator-=(const Resource& that)
         // Remove the resource if it becomes invalid or zero. We need
         // to do the validation because we want to strip negative
         // scalar Resource object.
-        if (validate(resource).isSome() || isEmpty(resource)) {
+        if (!internal::usable(resource) || isEmpty(resource)) {
           // As `resources` is not ordered, and erasing an element
           // from the middle using `DeleteSubrange` is expensive, we
           // swap with the last element and then shrink the
