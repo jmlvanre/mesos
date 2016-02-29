@@ -233,14 +233,14 @@ TEST(SorterTest, UpdateAllocation)
   volume.mutable_disk()->mutable_volume()->set_container_path("data");
 
   // Compute the updated allocation.
-  Resources oldAllocation = sorter.allocation("a", slaveId);
-  Try<Resources> newAllocation = oldAllocation.apply(CREATE(volume));
+  cpp::Resources oldAllocation = sorter.allocation("a", slaveId);
+  Try<cpp::Resources> newAllocation = oldAllocation.apply(CREATE(volume));
   ASSERT_SOME(newAllocation);
 
   // Update the resources for the client.
   sorter.update("a", slaveId, oldAllocation, newAllocation.get());
 
-  hashmap<SlaveID, Resources> allocation = sorter.allocation("a");
+  hashmap<SlaveID, cpp::Resources> allocation = sorter.allocation("a");
   EXPECT_EQ(1u, allocation.size());
   EXPECT_EQ(newAllocation.get(), allocation[slaveId]);
   EXPECT_EQ(newAllocation.get(), sorter.allocation("a", slaveId));
@@ -264,7 +264,7 @@ TEST(SorterTest, MultipleSlaves)
 
   sorter.add("framework");
 
-  Resources slaveResources =
+  cpp::Resources slaveResources =
     Resources::parse("cpus:2;mem:512;ports:[31000-32000]").get();
 
   sorter.add(slaveA, slaveResources);
@@ -296,7 +296,7 @@ TEST(SorterTest, MultipleSlavesUpdateAllocation)
 
   sorter.add("framework");
 
-  Resources slaveResources =
+  cpp::Resources slaveResources =
     Resources::parse("cpus:2;mem:512;disk:10;ports:[31000-32000]").get();
 
   sorter.add(slaveA, slaveResources);
@@ -311,7 +311,7 @@ TEST(SorterTest, MultipleSlavesUpdateAllocation)
   volume.mutable_disk()->mutable_volume()->set_container_path("data");
 
   // Compute the updated allocation.
-  Try<Resources> newAllocation = slaveResources.apply(CREATE(volume));
+  Try<cpp::Resources> newAllocation = slaveResources.apply(CREATE(volume));
   ASSERT_SOME(newAllocation);
 
   // Update the resources for the client.
@@ -420,20 +420,20 @@ TEST(SorterTest, RevocableResources)
 
   // Create a total resource pool of 10 revocable cpus and 10 cpus and
   // 10 MB mem.
-  Resource revocable = Resources::parse("cpus", "10", "*").get();
-  revocable.mutable_revocable();
-  Resources total = Resources::parse("cpus:10;mem:100").get() + revocable;
+  cpp::Resource revocable = Resources::parse("cpus", "10", "*").get();
+  revocable.make_revocable();
+  cpp::Resources total = cpp::Resources(Resources::parse("cpus:10;mem:100").get()) + revocable;
 
   sorter.add(slaveId, revocable);
 
   // Dominant share of "a" is 0.1 (cpus).
-  Resources a = Resources::parse("cpus:2;mem:1").get();
+  cpp::Resources a = Resources::parse("cpus:2;mem:1").get();
   sorter.allocated("a", slaveId, a);
 
   // Dominant share of "b" is 0.5 (cpus).
   revocable = Resources::parse("cpus", "9", "*").get();
-  revocable.mutable_revocable();
-  Resources b = Resources::parse("cpus:1;mem:1").get() + revocable;
+  revocable.make_revocable();
+  cpp::Resources b = cpp::Resources(Resources::parse("cpus:1;mem:1").get()) + revocable;
   sorter.allocated("b", slaveId, b);
 
   // Check that the allocations are correct.

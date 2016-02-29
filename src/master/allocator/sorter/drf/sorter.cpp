@@ -358,9 +358,9 @@ double DRFSorter::calculateShare(const string& name)
     //
     // NOTE: Scalar resources may be spread across multiple
     // 'Resource' objects. E.g. persistent volumes.
-    Option<Value::Scalar> __total = total_.scalars.get<Value::Scalar>(scalar);
+    Option<double> __total = total_.scalars.get<double>(scalar);
     CHECK_SOME(__total);
-    const double _total = __total.get().value();
+    const double _total = __total.get();
 
     if (_total > 0.0) {
       double allocation = 0.0;
@@ -370,11 +370,11 @@ double DRFSorter::calculateShare(const string& name)
       //
       // NOTE: Scalar resources may be spread across multiple
       // 'Resource' objects. E.g. persistent volumes.
-      Option<Value::Scalar> _allocation =
-        allocations[name].scalars.get<Value::Scalar>(scalar);
+      Option<double> _allocation =
+        allocations[name].scalars.get<double>(scalar);
 
       if (_allocation.isSome()) {
-        allocation = _allocation.get().value();
+        allocation = _allocation.get();
       }
 
       share = std::max(share, allocation / _total);

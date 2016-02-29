@@ -59,6 +59,18 @@ public:
     }
   }
 
+  const Mode& mode() const { return mode_; }
+
+  const std::string& container_path() const { return container_path_; }
+
+  bool has_host_path() const { return host_path_.isSome(); }
+
+  const std::string& host_path() const { return host_path_.get(); }
+
+  bool has_image() const { return image_.isSome(); }
+
+  const Image& image() const { return image_.get(); }
+
 private:
   Mode mode_;
   std::string container_path_;
@@ -78,7 +90,7 @@ public:
       RANGES,
       SET,
       TEXT
-    } type_;
+    };
 
     Value(double scalar) : type_(SCALAR), scalar_(scalar) {}
 
@@ -156,7 +168,152 @@ public:
       return *this;
     }
 
+    bool operator==(const Value& that) const
+    {
+      if (type() != that.type()) {
+        return false;
+      }
+
+      switch (that.type_) {
+        case SCALAR: {
+          return scalar() == that.scalar();
+        }
+        case RANGES: {
+          return ranges() == that.ranges();
+        }
+        case SET: {
+          return set() == that.set();
+        }
+        case TEXT: {
+          return text() == that.text();
+        }
+      }
+    }
+
+    bool operator<(const Value& that) const
+    {
+      if (type() != that.type() || type() == TEXT) {
+        return false;
+      }
+
+      switch (that.type_) {
+        case SCALAR: {
+          return scalar() < that.scalar();
+        }
+        case RANGES: {
+          ABORT("TODO: implement ranges operator<");
+          //return ranges() < that.ranges();
+        }
+        case SET: {
+          ABORT("TODO: implement set operator<");
+        }
+        case TEXT: {
+          break;
+        }
+      }
+
+      return false;
+    }
+
+    bool operator<=(const Value& that) const
+    {
+      return (*this < that) || (*this == that);
+    }
+
+    Value& operator+=(const Value& that)
+    {
+      // TODO(jmlvanre): We really shouldn't allow this silent failure.
+      // Consider throwing an error.
+      if (type() != that.type() || type() == TEXT) { return *this; }
+
+      switch (that.type_) {
+        case SCALAR: {
+          scalar_ += that.scalar();
+          break;
+        }
+        case RANGES: {
+          ranges_ += that.ranges();
+          break;
+        }
+        case SET: {
+          set_.insert(that.set().begin(), that.set().end());
+          break;
+        }
+        case TEXT: {
+          // Silent failure.
+          break;
+        }
+      }
+
+      return *this;
+    }
+
+    Value& operator-=(const Value& that)
+    {
+      // TODO(jmlvanre): We really shouldn't allow this silent failure.
+      // Consider throwing an error.
+      if (type() != that.type() || type() == TEXT) { return *this; }
+
+      switch (that.type_) {
+        case SCALAR: {
+          scalar_ -= that.scalar();
+          break;
+        }
+        case RANGES: {
+          ranges_ -= that.ranges();
+          break;
+        }
+        case SET: {
+          foreach (const std::string& key, that.set()) {
+            set_.erase(key);
+          }
+          break;
+        }
+        case TEXT: {
+          // Silent failure.
+          break;
+        }
+      }
+
+      return *this;
+    }
+
+    Value& operator+=(double value)
+    {
+      // TODO(jmlvanre): We really shouldn't allow this silent failure.
+      // Consider throwing an error.
+      if (type() == SCALAR) {
+        scalar_ += value;
+      }
+
+      return *this;
+    }
+
+    Value& operator-=(double value)
+    {
+      // TODO(jmlvanre): We really shouldn't allow this silent failure.
+      // Consider throwing an error.
+      if (type() == SCALAR) {
+        scalar_ -= value;
+      }
+
+      return *this;
+    }
+
+    const Type& type() const { return type_; }
+
+    double scalar() const { return scalar_; }
+
+    const IntervalSet<uint64_t>& ranges() const { return ranges_; }
+
+    const std::unordered_set<std::string>& set() const { return set_; }
+
+    const std::string& text() const { return text_; }
+
   private:
+
+    Type type_;
+
     union {
       double scalar_;
       IntervalSet<uint64_t> ranges_;
@@ -169,11 +326,62 @@ public:
   {
     Option<std::string> principal_;
 
+    struct Labels
+    {
+      std::map<std::string, std::string> labels;
+    };
+
+    Option<Labels> labels_;
+
     ReservationInfo(const ::mesos::Resource::ReservationInfo& reservation)
     {
       if (reservation.has_principal()) {
         principal_ = reservation.principal();
       }
+
+      if (reservation.has_labels()) {
+        labels_ = Labels();
+        foreach (const ::mesos::Label& label, reservation.labels().labels()) {
+          labels_.get().labels[label.key()] = label.value();
+        }
+      }
+    }
+
+    bool has_principal() const { return principal_.isSome(); }
+
+    const std::string& principal() const { return principal_.get(); }
+
+    bool has_labels() const { return labels_.isSome(); }
+
+    const Labels labels() const
+    {
+      return labels_.get();
+    }
+
+    bool operator==(const ReservationInfo& that) const
+    {
+      if (has_principal() != that.has_principal()) {
+        return false;
+      }
+
+      if (has_principal() && principal() != that.principal()) {
+        return false;
+      }
+
+      if (has_labels() != that.has_labels()) {
+        return false;
+      }
+
+      if (has_labels() && labels().labels != that.labels().labels) {
+        return false;
+      }
+
+      return true;
+    }
+
+    bool operator!=(const ReservationInfo& that) const
+    {
+      return !(*this == that);
     }
   };
 
@@ -191,6 +399,12 @@ public:
         }
       }
 
+      const std::string& id() const { return id_; }
+
+      bool has_principal() const { return principal_.isSome(); }
+
+      const std::string& principal() const { return principal_.get(); }
+
     private:
       std::string id_;
 
@@ -204,7 +418,7 @@ public:
       {
         PATH,
         MOUNT
-      } type_;
+      };
 
       Source(const ::mesos::Resource::DiskInfo::Source& source)
         : type_(source.type() == ::mesos::Resource::DiskInfo::Source::PATH ?
@@ -221,7 +435,37 @@ public:
         }
       }
 
+      const Type& type() const { return type_; }
+
+      bool has_path() const { return type_ == PATH; }
+
+      bool has_mount() const { return type_ == MOUNT; }
+
+      const std::string& path() const { return root_; }
+
+      const std::string& mount() const { return root_; }
+
+      bool operator==(const Source& that) const
+      {
+        if (type() != that.type()) {
+          return false;
+        }
+
+        if (has_path() && path() != that.path()) {
+          return false;
+        }
+
+        if (has_mount() && mount() != that.mount()) {
+          return false;
+        }
+
+        return true;
+      }
+
+      bool operator!=(const Source& that) const { return !(*this == that); }
+
     private:
+      Type type_;
       std::string root_;
     };
 
@@ -239,6 +483,50 @@ public:
         source_ = Source(disk.source());
       }
     }
+
+    bool has_source() const { return source_.isSome(); }
+
+    const Source& source() const { return source_.get(); }
+
+    bool has_persistence() const { return persistence_.isSome(); }
+
+    const Persistence& persistence() const { return persistence_.get(); }
+
+    void clear_persistence() { persistence_ = None(); }
+
+    bool has_volume() const { return volume_.isSome(); }
+
+    const Volume& volume() const { return volume_.get(); }
+
+    void clear_volume() { volume_ = None(); }
+
+    bool operator==(const DiskInfo& that) const
+    {
+      if (has_source() != that.has_source()) {
+        return false;
+      }
+
+      if (has_source() && source() != that.source()) {
+        return false;
+      }
+
+      // NOTE: We ignore 'volume' inside DiskInfo when doing comparison
+      // because it describes how this resource will be used which has
+      // nothing to do with the Resource object itself. A framework can
+      // use this resource and specify different 'volume' every time it
+      // uses it.
+      if (has_persistence() != that.has_persistence()) {
+        return false;
+      }
+
+      if (has_persistence()) {
+        return persistence().id() == that.persistence().id();
+      }
+
+      return true;
+    }
+
+    bool operator!=(const DiskInfo& that) const { return !(*this == that); }
 
   private:
     Option<Persistence> persistence_;
@@ -298,17 +586,63 @@ public:
       disk_(that.disk_),
       revocable_(that.revocable_) {}
 
+  bool has_role() const { return role_.isSome(); }
+
   const std::string& role() const
   {
     static std::string defaultRole = "*";
-    return role_.isSome() ? role_.get() : defaultRole;
+    return has_role() ? role_.get() : defaultRole;
   }
 
   void set_role(const std::string& role) { role_ = role; }
 
+  const Value::Type& type() const { return value_.type(); }
+
+  const Value& value() const { return value_; }
+
+  double scalar() const { return value_.scalar(); }
+
+  const IntervalSet<uint64_t>& ranges() const { return value_.ranges(); }
+
+  const std::unordered_set<std::string>& set() const { return value_.set(); }
+
+  const std::string& text() const { return value_.text(); }
+
+  const std::string& name() const { return name_; }
+
+  bool has_reservation() const { return reservation_.isSome(); }
+
+  const ReservationInfo& reservation() const { return reservation_.get(); }
+
+  ReservationInfo& mutable_reservation() { return reservation_.get(); }
+
   void clear_reservation() { reservation_ = None(); }
 
+  bool has_disk() const { return disk_.isSome(); }
+
+  const DiskInfo& disk() const { return disk_.get(); }
+
+  DiskInfo& mutable_disk() { return disk_.get(); }
+
   void clear_disk() { disk_ = None(); }
+
+  bool has_revocable() const { return revocable_.isSome(); }
+
+  void make_revocable() { revocable_ = RevocableInfo(); }
+
+  Resource& operator+=(const Resource& that)
+  {
+    value_ += that.value();
+
+    return *this;
+  }
+
+  Resource& operator-=(const Resource& that)
+  {
+    value_ -= that.value();
+
+    return *this;
+  }
 
 private:
 
@@ -397,6 +731,8 @@ public:
    */
   static Option<Error> validate(
       const google::protobuf::RepeatedPtrField<Resource>& resources);
+
+  static Option<Error> validate(const Resources& resources);
 
   // NOTE: The following predicate functions assume that the given
   // resource is validated.
@@ -581,11 +917,11 @@ public:
   Option<Bytes> disk() const;
 
   // TODO(vinod): Provide a Ranges abstraction.
-  Option<Value::Ranges> ports() const;
+  Option<IntervalSet<uint64_t>> ports() const;
 
   // TODO(jieyu): Consider returning an EphemeralPorts abstraction
   // which holds the ephemeral ports allocation logic.
-  Option<Value::Ranges> ephemeral_ports() const;
+  Option<IntervalSet<uint64_t>> ephemeral_ports() const;
 
   // NOTE: Non-`const` `iterator`, `begin()` and `end()` are __intentionally__
   // defined with `const` semantics in order to prevent mutable access to the
@@ -650,6 +986,11 @@ private:
 
   std::vector<Resource> resources;
 };
+
+
+template <>
+Option<::mesos::Value::Scalar> Resources::get(const std::string& name) const = delete;
+
 
 std::ostream& operator<<(std::ostream& stream, const Resource& resource);
 
